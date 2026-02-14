@@ -1,0 +1,11 @@
+# Gesture-to-Music System
+#
+# System dependency (install first):
+#   macOS:   brew install fluid-synth
+#   Linux:   sudo apt-get install fluidsynth libfluidsynth-dev
+#   Windows: download from https://github.com/FluidSynth/fluidsynth/releases
+#
+# Install all Python dependencies:
+#   pip install -r requirements.txt
+
+pyfluidsynth
