@@ -162,14 +162,17 @@ def check_instrument(sf2_path, query):
         list of dict: Matching presets.
     """
     presets = parse_sf2_presets(sf2_path)
-    query_lower = query.lower()
-    query_words = query_lower.split()
+    query_lower = query.lower().strip()
+    query_words = [w for w in re.split(r"[^a-z0-9#]+", query_lower) if w]
 
     matches = []
     for p in presets:
-        name_lower = p["name"].lower()
-        # Match if all query words appear in the preset name
-        if all(word in name_lower for word in query_words):
+        name_lower = p["name"].lower().strip()
+        name_words = set(w for w in re.split(r"[^a-z0-9#]+", name_lower) if w)
+
+        # Match only on whole words to avoid false positives like:
+        # query "oud" matching preset "Loud Glock".
+        if all(word in name_words for word in query_words):
             matches.append(p)
 
     return matches

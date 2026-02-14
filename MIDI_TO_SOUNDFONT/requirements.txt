@@ -1,0 +1,19 @@
+# MIDI_TO_SOUNDFONT dependencies
+#
+# System dependencies (install first):
+#   macOS:   brew install fluid-synth ffmpeg
+#   Linux:   sudo apt-get install fluidsynth libfluidsynth-dev ffmpeg
+#
+# Install Python dependencies:
+#   pip install -r requirements.txt
+
+pyfluidsynth
+basic-pitch
+yt-dlp
+onnxruntime
+scipy<1.13
+demucs
+torchcodec
+setuptools<70
+resampy<0.4.3
+numpy<2

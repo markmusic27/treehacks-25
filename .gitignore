@@ -1,7 +1,11 @@
 /MIDI_TO_SOUNDFONT/midi_output/
+/MIDI_TO_SOUNDFONT/audio_downloads/
+/MIDI_TO_SOUNDFONT/separated_stems/
 /MIDI_TO_SOUNDFONT/soundfonts/
 /MIDI_TO_SOUNDFONT/FluidSynth_Player/__pycache__/
+**/__pycache__/
+*.pyc
 *.sf2
 .DS_Store
 .venv/
-
+.env

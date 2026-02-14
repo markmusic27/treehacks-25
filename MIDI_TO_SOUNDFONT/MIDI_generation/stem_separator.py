@@ -173,8 +173,9 @@ def separate_stems(
     print(f"[Demucs] Model: {model} ({len(expected_stems)} stems)")
 
     # ── Build the command ───────────────────────────────────────────
+    # Use demucs.separate module explicitly (demucs v4)
     cmd = [
-        sys.executable, "-m", "demucs",
+        sys.executable, "-m", "demucs.separate",
         "--out", output_dir,
         "-n", model,
     ]
@@ -183,7 +184,9 @@ def separate_stems(
     if target_stem and not use_six_stems and target_stem in ("vocals", "drums"):
         cmd += ["--two-stems", target_stem]
 
-    cmd.append(audio_path)
+    # Use "--" to separate options from the track path
+    # (prevents filenames with spaces/dashes from being parsed as flags)
+    cmd += ["--", audio_path]
 
     # ── Run Demucs ──────────────────────────────────────────────────
     print(f"[Demucs] Running... (this may take a minute)")
@@ -197,8 +200,16 @@ def separate_stems(
 
     if result.returncode != 0:
         # Try with the demucs CLI directly
-        cmd[0:2] = ["demucs"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        cmd_fallback = [
+            "demucs",
+            "--out", output_dir,
+            "-n", model,
+        ]
+        if target_stem and not use_six_stems and target_stem in ("vocals", "drums"):
+            cmd_fallback += ["--two-stems", target_stem]
+        cmd_fallback += ["--", audio_path]
+
+        result = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(
                 f"Demucs failed:\n{result.stderr.strip()}"
