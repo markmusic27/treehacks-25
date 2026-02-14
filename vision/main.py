@@ -16,6 +16,7 @@ Controls:
 
 import asyncio
 import json
+import socket
 import time
 import threading
 from collections import deque
@@ -147,6 +148,7 @@ class PhoneTouch:
     id: int
     x: float  # 0-1 normalized
     y: float  # 0-1 normalized
+    string: int = -1  # closest string index
 
 
 @dataclass
@@ -519,7 +521,7 @@ def start_ws_server(phone: PhoneState, phone_lock: threading.Lock) -> None:
                     continue
 
                 touches = [
-                    PhoneTouch(id=t["id"], x=t["x"], y=t["y"])
+                    PhoneTouch(id=t["id"], x=t["x"], y=t["y"], string=t.get("string", -1))
                     for t in data.get("touches", [])
                 ]
 
@@ -545,7 +547,9 @@ def start_ws_server(phone: PhoneState, phone_lock: threading.Lock) -> None:
 
     async def run():
         async with ws_serve(handler, "0.0.0.0", WS_PORT):
+            local_ip = socket.gethostbyname(socket.gethostname())
             print(f"WebSocket server listening on ws://0.0.0.0:{WS_PORT}")
+            print(f"  → Enter this on the app: {local_ip}")
             await asyncio.Future()  # run forever
 
     loop = asyncio.new_event_loop()
