@@ -1,10 +1,11 @@
 """
-MediaPipe Hand Landmark Detection + Air Guitar
+MediaPipe Hand Landmark Detection + Fretboard
 
-Real-time hand landmark detection with guitar line projection and strum detection.
-- The guitar axis is the line between the two wrists.
-- Strum is detected when the right hand's fingertips cross the guitar axis.
+Real-time hand landmark detection with neck line projection and strum detection.
+- The neck axis is the line between the two wrists.
+- Strum is detected when the strum hand's fingertip crosses the neck axis.
 - Depth (z) is used for 3D perpendicular distance calculation.
+- Phone fretboard connects via WebSocket for multi-touch string data.
 
 Controls:
   - ESC or 'q': Quit
@@ -13,15 +14,20 @@ Controls:
   - Set SWAP_HANDS constant to flip which hand strums vs frets
 """
 
+import asyncio
+import json
 import time
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import cv2
 import mediapipe as mp
 import numpy as np
+import websockets
+from websockets.asyncio.server import serve as ws_serve
 
 # MediaPipe task-based imports
 from mediapipe.tasks.python import vision
@@ -75,6 +81,13 @@ STRUM_LANDMARK_INDEX = 8  # INDEX_FINGER_TIP
 # Wrist landmark index
 WRIST = 0
 
+# Network
+WS_PORT = 8765
+HTTP_PORT = 8766
+
+# Path to built fretboard app (Next.js static export)
+FRETBOARD_DIST = Path(__file__).parent / "fretboard" / "out"
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -113,8 +126,8 @@ class Vec3:
 
 
 @dataclass
-class GuitarState:
-    """Tracks the guitar line and strum detection state."""
+class FretboardState:
+    """Tracks the neck line and strum detection state."""
     # Smoothed wrist positions (normalized coords)
     left_wrist: Vec3 | None = None
     right_wrist: Vec3 | None = None
@@ -133,6 +146,31 @@ class GuitarState:
     strum_flash_frames: int = 0
 
 
+@dataclass
+class PhoneTouch:
+    """A single touch point from the phone fretboard."""
+    id: int
+    x: float  # 0-1 normalized
+    y: float  # 0-1 normalized
+
+
+@dataclass
+class PhoneState:
+    """Latest state received from the phone fretboard app."""
+    connected: bool = False
+    touches: list[PhoneTouch] = field(default_factory=list)
+    accel_x: float = 0.0
+    accel_y: float = 0.0
+    accel_z: float = 0.0
+    gyro_alpha: float = 0.0
+    gyro_beta: float = 0.0
+    gyro_gamma: float = 0.0
+    last_update: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Math helpers
+# ---------------------------------------------------------------------------
 def landmark_to_vec3(lm) -> Vec3:
     """Convert a MediaPipe landmark to Vec3."""
     return Vec3(lm.x, lm.y, lm.z)
@@ -160,63 +198,55 @@ def signed_perp_distance_3d(point: Vec3, line_start: Vec3, line_end: Vec3) -> fl
     Compute signed perpendicular distance from a point to a line in 3D.
 
     The sign is determined by the cross product's z-component (in image space,
-    this tells us which side of the guitar axis the point is on).
+    this tells us which side of the neck axis the point is on).
     Returns positive if the point is "above" the line (in screen coords),
     negative if "below".
     """
     d = line_end - line_start
     v = point - line_start
 
-    # Cross product gives perpendicular vector; its magnitude = |d| * distance
     cross = d.cross(v)
     d_len = d.length()
     if d_len < 1e-8:
         return 0.0
 
-    # Magnitude of perpendicular distance
     dist = cross.length() / d_len
-
-    # Sign: use the z-component of the 2D cross product (dx*vy - dy*vx)
-    # Positive = point is on one side, negative = other side
     sign = d.x * v.y - d.y * v.x
     return dist if sign >= 0 else -dist
 
 
-def detect_strum(guitar: GuitarState, perp_dist: float) -> str | None:
+def detect_strum(fretboard: FretboardState, perp_dist: float) -> str | None:
     """
     Detect strum by tracking sign changes in perpendicular distance.
     Returns "down", "up", or None.
     """
-    guitar.perp_history.append(perp_dist)
+    fretboard.perp_history.append(perp_dist)
 
-    if guitar.strum_cooldown > 0:
-        guitar.strum_cooldown -= 1
-        guitar.prev_perp_dist = perp_dist
+    if fretboard.strum_cooldown > 0:
+        fretboard.strum_cooldown -= 1
+        fretboard.prev_perp_dist = perp_dist
         return None
 
-    # Need at least 2 frames
-    if len(guitar.perp_history) < 2:
-        guitar.prev_perp_dist = perp_dist
+    if len(fretboard.perp_history) < 2:
+        fretboard.prev_perp_dist = perp_dist
         return None
 
-    # Check for sign change (crossing the line)
-    prev = guitar.prev_perp_dist
-    if prev * perp_dist < 0:  # Sign changed
-        # Compute velocity (change per frame)
+    prev = fretboard.prev_perp_dist
+    if prev * perp_dist < 0:  # Sign changed — crossed the neck line
         velocity = abs(perp_dist - prev)
         if velocity > STRUM_VELOCITY_THRESHOLD:
             direction = "down" if perp_dist > prev else "up"
-            guitar.strum_cooldown = STRUM_COOLDOWN_FRAMES
-            guitar.last_strum_direction = direction
-            guitar.last_strum_time = time.time()
+            fretboard.strum_cooldown = STRUM_COOLDOWN_FRAMES
+            fretboard.last_strum_direction = direction
+            fretboard.last_strum_time = time.time()
             # Only count and flash for down strums
             if direction == "down":
-                guitar.strum_count += 1
-                guitar.strum_flash_frames = 6
-            guitar.prev_perp_dist = perp_dist
+                fretboard.strum_count += 1
+                fretboard.strum_flash_frames = 6
+            fretboard.prev_perp_dist = perp_dist
             return direction
 
-    guitar.prev_perp_dist = perp_dist
+    fretboard.prev_perp_dist = perp_dist
     return None
 
 
@@ -245,62 +275,58 @@ def identify_hands(
     return left_lm, right_lm
 
 
-def draw_guitar_line(
+# ---------------------------------------------------------------------------
+# Drawing helpers
+# ---------------------------------------------------------------------------
+def draw_neck_line(
     image: np.ndarray,
-    guitar: GuitarState,
-    right_hand_landmarks: list | None,
+    fretboard: FretboardState,
+    strum_hand_landmarks: list | None,
 ) -> None:
-    """Draw the guitar axis line and strum detection visuals."""
-    if guitar.left_wrist is None or guitar.right_wrist is None:
+    """Draw the neck axis line and strum detection visuals."""
+    if fretboard.left_wrist is None or fretboard.right_wrist is None:
         return
 
     h, w, _ = image.shape
-    lw = guitar.left_wrist
-    rw = guitar.right_wrist
+    lw = fretboard.left_wrist
+    rw = fretboard.right_wrist
 
     lx, ly = lw.to_pixel(w, h)
     rx, ry = rw.to_pixel(w, h)
 
-    # --- Draw the guitar axis (yellow line) ---
-    # Compute depth-based thickness: closer = thicker
+    # Depth-based thickness: closer = thicker
     avg_z = (lw.z + rw.z) / 2
-    # z is typically negative (closer) to positive (farther); map to thickness
-    # Range roughly -0.3 to 0.3; map to thickness 2-8
     thickness = int(np.clip(5 - avg_z * 15, 2, 10))
 
-    # Main guitar line
+    # Neck line color (flashes white on strum)
     line_color = COLOR_YELLOW
-    if guitar.strum_flash_frames > 0:
-        # Flash white on strum
-        flash_intensity = guitar.strum_flash_frames / 6.0
+    if fretboard.strum_flash_frames > 0:
+        flash_intensity = fretboard.strum_flash_frames / 6.0
         line_color = (
             int(0 + 255 * flash_intensity),
             int(255),
             int(255),
         )
-        guitar.strum_flash_frames -= 1
+        fretboard.strum_flash_frames -= 1
 
     cv2.line(image, (lx, ly), (rx, ry), line_color, thickness, cv2.LINE_AA)
 
-    # Draw small circles at wrist anchor points
+    # Wrist anchor dots
     cv2.circle(image, (lx, ly), 6, COLOR_YELLOW, -1, cv2.LINE_AA)
     cv2.circle(image, (rx, ry), 6, COLOR_YELLOW, -1, cv2.LINE_AA)
 
-    # --- Draw depth indicators ---
+    # Depth label
     depth_text = f"Depth L:{lw.z:.3f} R:{rw.z:.3f}"
     cv2.putText(image, depth_text, (lx, ly - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_YELLOW, 1, cv2.LINE_AA)
 
-    # --- Draw strum zone indicator ---
-    # The strum zone is near the right wrist; draw a perpendicular band
+    # Strum zone: perpendicular band at the strum wrist
     dx, dy = rx - lx, ry - ly
     line_len = (dx ** 2 + dy ** 2) ** 0.5
     if line_len > 10:
-        # Perpendicular direction (normalized)
         px, py = -dy / line_len, dx / line_len
-        strum_zone_len = 40  # pixels
+        strum_zone_len = 40
 
-        # Draw perpendicular strum line at right wrist
         sz_x1 = int(rx + px * strum_zone_len)
         sz_y1 = int(ry + py * strum_zone_len)
         sz_x2 = int(rx - px * strum_zone_len)
@@ -308,20 +334,18 @@ def draw_guitar_line(
         cv2.line(image, (sz_x1, sz_y1), (sz_x2, sz_y2),
                  COLOR_CYAN, 2, cv2.LINE_AA)
 
-    # --- Draw fingertip centroid if right hand is available ---
-    if right_hand_landmarks is not None:
-        centroid = get_strum_point(right_hand_landmarks)
-        cx, cy = centroid.to_pixel(w, h)
+    # Strum point indicator
+    if strum_hand_landmarks is not None:
+        sp = get_strum_point(strum_hand_landmarks)
+        cx, cy = sp.to_pixel(w, h)
         cv2.circle(image, (cx, cy), 5, COLOR_CYAN, -1, cv2.LINE_AA)
 
-        # Draw line from centroid perpendicular to guitar axis
-        # (visual debug of the perpendicular distance)
-        perp_dist = signed_perp_distance_3d(centroid, lw, rw)
+        perp_dist = signed_perp_distance_3d(sp, lw, rw)
         dist_color = COLOR_GREEN if perp_dist >= 0 else COLOR_RED
         cv2.circle(image, (cx, cy), 8, dist_color, 2, cv2.LINE_AA)
 
 
-def draw_strum_panel(image: np.ndarray, guitar: GuitarState) -> None:
+def draw_strum_panel(image: np.ndarray, fretboard: FretboardState) -> None:
     """Draw strum detection info panel."""
     h, w, _ = image.shape
     panel_x = w - 260
@@ -329,23 +353,20 @@ def draw_strum_panel(image: np.ndarray, guitar: GuitarState) -> None:
     panel_w = 250
     panel_h = 90
 
-    # Translucent background
     overlay = image.copy()
     cv2.rectangle(overlay, (panel_x, panel_y),
-                  (panel_x + panel_w, panel_y + panel_h),
-                  COLOR_BLACK, -1)
+                  (panel_x + panel_w, panel_y + panel_h), COLOR_BLACK, -1)
     cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
 
-    cv2.putText(image, "Guitar / Strum", (panel_x + 10, panel_y + 22),
+    cv2.putText(image, "Fretboard / Strum", (panel_x + 10, panel_y + 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_YELLOW, 1, cv2.LINE_AA)
 
-    cv2.putText(image, f"Strums: {guitar.strum_count}",
+    cv2.putText(image, f"Strums: {fretboard.strum_count}",
                 (panel_x + 10, panel_y + 45),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA)
 
-    # Show last strum direction with fade
-    if guitar.last_strum_direction:
-        elapsed = time.time() - guitar.last_strum_time
+    if fretboard.last_strum_direction:
+        elapsed = time.time() - fretboard.last_strum_time
         if elapsed < 1.0:
             alpha = max(0, 1.0 - elapsed)
             color = (
@@ -353,14 +374,13 @@ def draw_strum_panel(image: np.ndarray, guitar: GuitarState) -> None:
                 int(COLOR_CYAN[1] * alpha),
                 int(COLOR_CYAN[2] * alpha),
             )
-            arrow = "v" if guitar.last_strum_direction == "down" else "^"
-            cv2.putText(image, f"Last: {arrow} {guitar.last_strum_direction}",
+            arrow = "v" if fretboard.last_strum_direction == "down" else "^"
+            cv2.putText(image, f"Last: {arrow} {fretboard.last_strum_direction}",
                         (panel_x + 10, panel_y + 70),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
-    # Perpendicular distance bar (visual)
-    if guitar.perp_history:
-        latest = guitar.perp_history[-1]
+    if fretboard.perp_history:
+        latest = fretboard.perp_history[-1]
         bar_center_x = panel_x + panel_w // 2
         bar_y = panel_y + 80
         bar_half_w = 80
@@ -374,9 +394,43 @@ def draw_strum_panel(image: np.ndarray, guitar: GuitarState) -> None:
                  bar_color, 4, cv2.LINE_AA)
 
 
-# ---------------------------------------------------------------------------
-# Existing drawing helpers (unchanged)
-# ---------------------------------------------------------------------------
+def draw_phone_panel(image: np.ndarray, phone: PhoneState) -> None:
+    """Draw phone connection status and touch data overlay."""
+    h, w, _ = image.shape
+    panel_x = 10
+    panel_y = h - 120
+    panel_w = 300
+    panel_h = 110
+
+    overlay = image.copy()
+    cv2.rectangle(overlay, (panel_x, panel_y),
+                  (panel_x + panel_w, panel_y + panel_h), COLOR_BLACK, -1)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+
+    # Connection status
+    status_color = COLOR_GREEN if phone.connected else COLOR_RED
+    status_text = "Phone: Connected" if phone.connected else f"Phone: Waiting (ws://IP:{WS_PORT})"
+    cv2.putText(image, status_text, (panel_x + 10, panel_y + 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_color, 1, cv2.LINE_AA)
+
+    if phone.connected and phone.touches:
+        # Show active touches
+        touch_text = f"Touches: {len(phone.touches)}"
+        cv2.putText(image, touch_text, (panel_x + 10, panel_y + 45),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_WHITE, 1, cv2.LINE_AA)
+
+        for i, t in enumerate(phone.touches[:4]):  # Show max 4
+            cv2.putText(
+                image,
+                f"  T{t.id}: ({t.x:.2f}, {t.y:.2f})",
+                (panel_x + 10, panel_y + 65 + i * 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, COLOR_CYAN, 1, cv2.LINE_AA,
+            )
+    elif phone.connected:
+        cv2.putText(image, "No touches", (panel_x + 10, panel_y + 45),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_WHITE, 1, cv2.LINE_AA)
+
+
 def draw_hand_info_panel(
     image: np.ndarray,
     result: HandLandmarkerResult,
@@ -452,10 +506,75 @@ def draw_skeleton_only(
 
 
 # ---------------------------------------------------------------------------
+# WebSocket server for phone fretboard
+# ---------------------------------------------------------------------------
+def start_ws_server(phone: PhoneState, phone_lock: threading.Lock) -> None:
+    """Run the WebSocket server in a background thread."""
+
+    async def handler(websocket):
+        print(f"Phone connected: {websocket.remote_address}")
+        with phone_lock:
+            phone.connected = True
+
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+
+                touches = [
+                    PhoneTouch(id=t["id"], x=t["x"], y=t["y"])
+                    for t in data.get("touches", [])
+                ]
+
+                accel = data.get("accel", {})
+                gyro = data.get("gyro", {})
+
+                with phone_lock:
+                    phone.touches = touches
+                    phone.accel_x = accel.get("x", 0.0)
+                    phone.accel_y = accel.get("y", 0.0)
+                    phone.accel_z = accel.get("z", 0.0)
+                    phone.gyro_alpha = gyro.get("alpha", 0.0)
+                    phone.gyro_beta = gyro.get("beta", 0.0)
+                    phone.gyro_gamma = gyro.get("gamma", 0.0)
+                    phone.last_update = time.time()
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        finally:
+            print("Phone disconnected.")
+            with phone_lock:
+                phone.connected = False
+                phone.touches = []
+
+    async def run():
+        async with ws_serve(handler, "0.0.0.0", WS_PORT):
+            print(f"WebSocket server listening on ws://0.0.0.0:{WS_PORT}")
+            await asyncio.Future()  # run forever
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(run())
+
+
+def start_http_server() -> None:
+    """Serve the fretboard app's built files over HTTP."""
+    import functools
+
+    dist_path = str(FRETBOARD_DIST)
+
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=dist_path)
+    httpd = HTTPServer(("0.0.0.0", HTTP_PORT), handler)
+    print(f"HTTP server serving fretboard at http://0.0.0.0:{HTTP_PORT}")
+    httpd.serve_forever()
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 def main() -> None:
-    """Run real-time hand landmark detection with guitar line + strum."""
+    """Run real-time hand landmark detection with neck line + strum."""
     if not Path(MODEL_PATH).exists():
         print(f"Error: Model not found at {MODEL_PATH}")
         print("Download it with:")
@@ -464,12 +583,15 @@ def main() -> None:
               "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task")
         return
 
-    print("Starting Air Guitar — Hand Landmark Detection + Strum")
+    print("Starting Fretboard — Hand Landmark Detection + Strum")
     print("Controls: ESC/q = Quit | f = Toggle FPS | m = Cycle mode")
 
-    # Shared state for LIVE_STREAM callback
+    # Shared state
     latest_result: HandLandmarkerResult | None = None
     result_lock = threading.Lock()
+
+    phone = PhoneState()
+    phone_lock = threading.Lock()
 
     def on_result(
         result: HandLandmarkerResult,
@@ -479,6 +601,19 @@ def main() -> None:
         nonlocal latest_result
         with result_lock:
             latest_result = result
+
+    # Start WebSocket server in background
+    ws_thread = threading.Thread(target=start_ws_server, args=(phone, phone_lock), daemon=True)
+    ws_thread.start()
+
+    # Start HTTP server for fretboard app (if built)
+    if FRETBOARD_DIST.exists():
+        http_thread = threading.Thread(target=start_http_server, daemon=True)
+        http_thread.start()
+    else:
+        print(f"Note: Fretboard app not built yet ({FRETBOARD_DIST}).")
+        print("  Run: cd fretboard && npm run build")
+        print(f"  Or use Vite dev server: cd fretboard && npm run dev")
 
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
@@ -504,7 +639,7 @@ def main() -> None:
     fps = 0.0
     frame_timestamp_ms = 0
 
-    guitar = GuitarState()
+    fretboard = FretboardState()
 
     with HandLandmarker.create_from_options(options) as landmarker:
         while cap.isOpened():
@@ -524,10 +659,9 @@ def main() -> None:
             with result_lock:
                 result = latest_result
 
-            right_hand_lm = None
+            strum_hand_lm = None
 
             if result and result.hand_landmarks:
-                # Draw hand landmarks
                 for idx, hand_landmarks in enumerate(result.hand_landmarks):
                     if display_mode == MODE_SKELETON:
                         draw_skeleton_only(frame, hand_landmarks, idx)
@@ -543,37 +677,48 @@ def main() -> None:
 
                 draw_hand_info_panel(frame, result)
 
-                # --- Guitar logic ---
-                left_lm, right_lm = identify_hands(result)
+                # --- Fretboard logic ---
+                fret_lm, strum_lm = identify_hands(result)
 
-                if left_lm is not None:
-                    raw_left = landmark_to_vec3(left_lm[WRIST])
-                    guitar.left_wrist = smooth_vec3(
-                        guitar.left_wrist, raw_left, SMOOTH_ALPHA,
+                if fret_lm is not None:
+                    raw_left = landmark_to_vec3(fret_lm[WRIST])
+                    fretboard.left_wrist = smooth_vec3(
+                        fretboard.left_wrist, raw_left, SMOOTH_ALPHA,
                     )
 
-                if right_lm is not None:
-                    raw_right = landmark_to_vec3(right_lm[WRIST])
-                    guitar.right_wrist = smooth_vec3(
-                        guitar.right_wrist, raw_right, SMOOTH_ALPHA,
+                if strum_lm is not None:
+                    raw_right = landmark_to_vec3(strum_lm[WRIST])
+                    fretboard.right_wrist = smooth_vec3(
+                        fretboard.right_wrist, raw_right, SMOOTH_ALPHA,
                     )
-                    right_hand_lm = right_lm
+                    strum_hand_lm = strum_lm
 
                 # Strum detection (need both hands)
-                if (guitar.left_wrist is not None
-                        and guitar.right_wrist is not None
-                        and right_lm is not None):
-                    strum_point = get_strum_point(right_lm)
+                if (fretboard.left_wrist is not None
+                        and fretboard.right_wrist is not None
+                        and strum_lm is not None):
+                    strum_point = get_strum_point(strum_lm)
                     perp = signed_perp_distance_3d(
-                        strum_point, guitar.left_wrist, guitar.right_wrist,
+                        strum_point, fretboard.left_wrist, fretboard.right_wrist,
                     )
-                    strum = detect_strum(guitar, perp)
+                    strum = detect_strum(fretboard, perp)
                     if strum == "down":
-                        print(f"STRUM DOWN (#{guitar.strum_count})")
+                        print(f"STRUM DOWN (#{fretboard.strum_count})")
 
-            # Draw guitar line (even if one hand lost — uses smoothed positions)
-            draw_guitar_line(frame, guitar, right_hand_lm)
-            draw_strum_panel(frame, guitar)
+            # Draw overlays
+            draw_neck_line(frame, fretboard, strum_hand_lm)
+            draw_strum_panel(frame, fretboard)
+
+            with phone_lock:
+                phone_snapshot = PhoneState(
+                    connected=phone.connected,
+                    touches=list(phone.touches),
+                    accel_x=phone.accel_x,
+                    accel_y=phone.accel_y,
+                    accel_z=phone.accel_z,
+                    last_update=phone.last_update,
+                )
+            draw_phone_panel(frame, phone_snapshot)
 
             # FPS
             current_time = time.time()
@@ -591,7 +736,7 @@ def main() -> None:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE,
                         1, cv2.LINE_AA)
 
-            cv2.imshow("Air Guitar — MediaPipe", frame)
+            cv2.imshow("Fretboard — MediaPipe", frame)
 
             key = cv2.waitKey(5) & 0xFF
             if key == 27 or key == ord("q"):
@@ -603,7 +748,7 @@ def main() -> None:
 
     cap.release()
     cv2.destroyAllWindows()
-    print(f"Done. Total strums detected: {guitar.strum_count}")
+    print(f"Done. Total strums detected: {fretboard.strum_count}")
 
 
 if __name__ == "__main__":
