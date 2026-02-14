@@ -14,9 +14,39 @@ Requirements:
   - Python: pip install pyfluidsynth
 """
 
-import fluidsynth
+import ctypes.util
 import atexit
 import os
+
+# ── Patch library search for FluidSynth on macOS ────────────────────────
+# On macOS with Homebrew + pyenv/conda, ctypes.util.find_library("fluidsynth")
+# returns None because the search path doesn't include /opt/homebrew/lib/.
+# We temporarily patch find_library so pyfluidsynth can locate the .dylib.
+
+_HOMEBREW_LIB_PATHS = [
+    "/opt/homebrew/lib/libfluidsynth.dylib",      # Apple Silicon
+    "/usr/local/lib/libfluidsynth.dylib",          # Intel Mac
+]
+
+_original_find_library = ctypes.util.find_library
+
+def _patched_find_library(name):
+    """find_library wrapper that also checks Homebrew paths for fluidsynth."""
+    result = _original_find_library(name)
+    if result is not None:
+        return result
+    # If the standard search failed and we're looking for fluidsynth,
+    # check common Homebrew locations directly.
+    if name in ("fluidsynth", "libfluidsynth"):
+        for path in _HOMEBREW_LIB_PATHS:
+            if os.path.exists(path):
+                return path
+    return None
+
+# Apply the patch, import fluidsynth, then restore
+ctypes.util.find_library = _patched_find_library
+import fluidsynth
+ctypes.util.find_library = _original_find_library
 
 
 class FluidSynthPlayer:
