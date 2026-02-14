@@ -1,17 +1,22 @@
 """
-MediaPipe Hand Landmark Detection
+MediaPipe Hand Landmark Detection + Air Guitar
 
-Real-time hand landmark detection using Google's MediaPipe.
-Detects up to 2 hands and draws 21 landmarks per hand with connections.
+Real-time hand landmark detection with guitar line projection and strum detection.
+- The guitar axis is the line between the two wrists.
+- Strum is detected when the right hand's fingertips cross the guitar axis.
+- Depth (z) is used for 3D perpendicular distance calculation.
 
 Controls:
   - ESC or 'q': Quit
   - 'f': Toggle FPS display
   - 'm': Cycle through detection modes (full / landmarks only / skeleton only)
+  - Set SWAP_HANDS constant to flip which hand strums vs frets
 """
 
 import time
 import threading
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -31,27 +36,351 @@ from mediapipe.tasks.python.vision import (
 )
 from mediapipe.tasks.python import BaseOptions
 
-# Model path
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 MODEL_PATH = str(Path(__file__).parent / "hand_landmarker.task")
 
-# Display mode constants
-MODE_FULL = 0       # Landmarks + connections + labels
-MODE_LANDMARKS = 1  # Landmarks + connections (no labels)
-MODE_SKELETON = 2   # Connections only (thin lines)
+MODE_FULL = 0
+MODE_LANDMARKS = 1
+MODE_SKELETON = 2
 MODE_NAMES = ["Full", "Landmarks", "Skeleton"]
 
 # Colors (BGR)
 COLOR_GREEN = (0, 255, 0)
 COLOR_WHITE = (255, 255, 255)
 COLOR_BLACK = (0, 0, 0)
+COLOR_YELLOW = (0, 255, 255)
+COLOR_RED = (0, 0, 255)
+COLOR_CYAN = (255, 255, 0)
 
-# Hand colors for multi-hand distinction
 HAND_COLORS = [
-    (0, 255, 0),    # Green for first hand
-    (255, 165, 0),  # Orange for second hand
+    (0, 255, 0),    # Green
+    (255, 165, 0),  # Orange
 ]
 
+# Smoothing factor for exponential moving average (0 = no smoothing, 1 = frozen)
+SMOOTH_ALPHA = 0.6
 
+# Hand assignment — set to True to swap which hand strums vs frets
+SWAP_HANDS = True
+
+# Strum detection
+STRUM_VELOCITY_THRESHOLD = 0.02   # Min perpendicular velocity to count as strum
+STRUM_COOLDOWN_FRAMES = 8         # Ignore strums within this many frames of last
+
+# Fingertip landmark indices (index, middle, ring, pinky tips)
+FINGERTIP_INDICES = [8, 12, 16, 20]
+
+# Wrist landmark index
+WRIST = 0
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+@dataclass
+class Vec3:
+    """Simple 3D vector for landmark math."""
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+    def __add__(self, o: "Vec3") -> "Vec3":
+        return Vec3(self.x + o.x, self.y + o.y, self.z + o.z)
+
+    def __sub__(self, o: "Vec3") -> "Vec3":
+        return Vec3(self.x - o.x, self.y - o.y, self.z - o.z)
+
+    def __mul__(self, s: float) -> "Vec3":
+        return Vec3(self.x * s, self.y * s, self.z * s)
+
+    def dot(self, o: "Vec3") -> float:
+        return self.x * o.x + self.y * o.y + self.z * o.z
+
+    def cross(self, o: "Vec3") -> "Vec3":
+        return Vec3(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
+
+    def length(self) -> float:
+        return (self.x ** 2 + self.y ** 2 + self.z ** 2) ** 0.5
+
+    def to_pixel(self, w: int, h: int) -> tuple[int, int]:
+        return int(self.x * w), int(self.y * h)
+
+
+@dataclass
+class GuitarState:
+    """Tracks the guitar line and strum detection state."""
+    # Smoothed wrist positions (normalized coords)
+    left_wrist: Vec3 | None = None
+    right_wrist: Vec3 | None = None
+
+    # Strum detection
+    prev_perp_dist: float = 0.0
+    strum_cooldown: int = 0
+    last_strum_direction: str = ""  # "down" or "up"
+    last_strum_time: float = 0.0
+    strum_count: int = 0
+
+    # History for velocity calculation
+    perp_history: deque = field(default_factory=lambda: deque(maxlen=5))
+
+    # Visual feedback
+    strum_flash_frames: int = 0
+
+
+def landmark_to_vec3(lm) -> Vec3:
+    """Convert a MediaPipe landmark to Vec3."""
+    return Vec3(lm.x, lm.y, lm.z)
+
+
+def smooth_vec3(old: Vec3 | None, new: Vec3, alpha: float) -> Vec3:
+    """Exponential moving average for Vec3."""
+    if old is None:
+        return new
+    return Vec3(
+        old.x * alpha + new.x * (1 - alpha),
+        old.y * alpha + new.y * (1 - alpha),
+        old.z * alpha + new.z * (1 - alpha),
+    )
+
+
+def get_fingertip_centroid(hand_landmarks: list) -> Vec3:
+    """Average position of fingertip landmarks."""
+    cx, cy, cz = 0.0, 0.0, 0.0
+    for idx in FINGERTIP_INDICES:
+        lm = hand_landmarks[idx]
+        cx += lm.x
+        cy += lm.y
+        cz += lm.z
+    n = len(FINGERTIP_INDICES)
+    return Vec3(cx / n, cy / n, cz / n)
+
+
+def signed_perp_distance_3d(point: Vec3, line_start: Vec3, line_end: Vec3) -> float:
+    """
+    Compute signed perpendicular distance from a point to a line in 3D.
+
+    The sign is determined by the cross product's z-component (in image space,
+    this tells us which side of the guitar axis the point is on).
+    Returns positive if the point is "above" the line (in screen coords),
+    negative if "below".
+    """
+    d = line_end - line_start
+    v = point - line_start
+
+    # Cross product gives perpendicular vector; its magnitude = |d| * distance
+    cross = d.cross(v)
+    d_len = d.length()
+    if d_len < 1e-8:
+        return 0.0
+
+    # Magnitude of perpendicular distance
+    dist = cross.length() / d_len
+
+    # Sign: use the z-component of the 2D cross product (dx*vy - dy*vx)
+    # Positive = point is on one side, negative = other side
+    sign = d.x * v.y - d.y * v.x
+    return dist if sign >= 0 else -dist
+
+
+def detect_strum(guitar: GuitarState, perp_dist: float) -> str | None:
+    """
+    Detect strum by tracking sign changes in perpendicular distance.
+    Returns "down", "up", or None.
+    """
+    guitar.perp_history.append(perp_dist)
+
+    if guitar.strum_cooldown > 0:
+        guitar.strum_cooldown -= 1
+        guitar.prev_perp_dist = perp_dist
+        return None
+
+    # Need at least 2 frames
+    if len(guitar.perp_history) < 2:
+        guitar.prev_perp_dist = perp_dist
+        return None
+
+    # Check for sign change (crossing the line)
+    prev = guitar.prev_perp_dist
+    if prev * perp_dist < 0:  # Sign changed
+        # Compute velocity (change per frame)
+        velocity = abs(perp_dist - prev)
+        if velocity > STRUM_VELOCITY_THRESHOLD:
+            direction = "down" if perp_dist > prev else "up"
+            guitar.strum_cooldown = STRUM_COOLDOWN_FRAMES
+            guitar.last_strum_direction = direction
+            guitar.last_strum_time = time.time()
+            guitar.strum_count += 1
+            guitar.strum_flash_frames = 6
+            guitar.prev_perp_dist = perp_dist
+            return direction
+
+    guitar.prev_perp_dist = perp_dist
+    return None
+
+
+def identify_hands(
+    result: HandLandmarkerResult,
+) -> tuple[list | None, list | None]:
+    """
+    Identify fret (left) and strum (right) hands from the result.
+    Returns (fret_hand_landmarks, strum_hand_landmarks).
+
+    When SWAP_HANDS is True the MediaPipe "Left"/"Right" labels are swapped
+    so the correct physical hand maps to fret/strum.
+    """
+    left_lm = None
+    right_lm = None
+
+    for i, handedness in enumerate(result.handedness):
+        label = handedness[0].category_name
+        if SWAP_HANDS:
+            label = "Right" if label == "Left" else "Left"
+        if label == "Left":
+            left_lm = result.hand_landmarks[i]
+        elif label == "Right":
+            right_lm = result.hand_landmarks[i]
+
+    return left_lm, right_lm
+
+
+def draw_guitar_line(
+    image: np.ndarray,
+    guitar: GuitarState,
+    right_hand_landmarks: list | None,
+) -> None:
+    """Draw the guitar axis line and strum detection visuals."""
+    if guitar.left_wrist is None or guitar.right_wrist is None:
+        return
+
+    h, w, _ = image.shape
+    lw = guitar.left_wrist
+    rw = guitar.right_wrist
+
+    lx, ly = lw.to_pixel(w, h)
+    rx, ry = rw.to_pixel(w, h)
+
+    # --- Draw the guitar axis (yellow line) ---
+    # Compute depth-based thickness: closer = thicker
+    avg_z = (lw.z + rw.z) / 2
+    # z is typically negative (closer) to positive (farther); map to thickness
+    # Range roughly -0.3 to 0.3; map to thickness 2-8
+    thickness = int(np.clip(5 - avg_z * 15, 2, 10))
+
+    # Main guitar line
+    line_color = COLOR_YELLOW
+    if guitar.strum_flash_frames > 0:
+        # Flash white on strum
+        flash_intensity = guitar.strum_flash_frames / 6.0
+        line_color = (
+            int(0 + 255 * flash_intensity),
+            int(255),
+            int(255),
+        )
+        guitar.strum_flash_frames -= 1
+
+    cv2.line(image, (lx, ly), (rx, ry), line_color, thickness, cv2.LINE_AA)
+
+    # Draw small circles at wrist anchor points
+    cv2.circle(image, (lx, ly), 6, COLOR_YELLOW, -1, cv2.LINE_AA)
+    cv2.circle(image, (rx, ry), 6, COLOR_YELLOW, -1, cv2.LINE_AA)
+
+    # --- Draw depth indicators ---
+    depth_text = f"Depth L:{lw.z:.3f} R:{rw.z:.3f}"
+    cv2.putText(image, depth_text, (lx, ly - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_YELLOW, 1, cv2.LINE_AA)
+
+    # --- Draw strum zone indicator ---
+    # The strum zone is near the right wrist; draw a perpendicular band
+    dx, dy = rx - lx, ry - ly
+    line_len = (dx ** 2 + dy ** 2) ** 0.5
+    if line_len > 10:
+        # Perpendicular direction (normalized)
+        px, py = -dy / line_len, dx / line_len
+        strum_zone_len = 40  # pixels
+
+        # Draw perpendicular strum line at right wrist
+        sz_x1 = int(rx + px * strum_zone_len)
+        sz_y1 = int(ry + py * strum_zone_len)
+        sz_x2 = int(rx - px * strum_zone_len)
+        sz_y2 = int(ry - py * strum_zone_len)
+        cv2.line(image, (sz_x1, sz_y1), (sz_x2, sz_y2),
+                 COLOR_CYAN, 2, cv2.LINE_AA)
+
+    # --- Draw fingertip centroid if right hand is available ---
+    if right_hand_landmarks is not None:
+        centroid = get_fingertip_centroid(right_hand_landmarks)
+        cx, cy = centroid.to_pixel(w, h)
+        cv2.circle(image, (cx, cy), 5, COLOR_CYAN, -1, cv2.LINE_AA)
+
+        # Draw line from centroid perpendicular to guitar axis
+        # (visual debug of the perpendicular distance)
+        perp_dist = signed_perp_distance_3d(centroid, lw, rw)
+        dist_color = COLOR_GREEN if perp_dist >= 0 else COLOR_RED
+        cv2.circle(image, (cx, cy), 8, dist_color, 2, cv2.LINE_AA)
+
+
+def draw_strum_panel(image: np.ndarray, guitar: GuitarState) -> None:
+    """Draw strum detection info panel."""
+    h, w, _ = image.shape
+    panel_x = w - 260
+    panel_y = h - 100
+    panel_w = 250
+    panel_h = 90
+
+    # Translucent background
+    overlay = image.copy()
+    cv2.rectangle(overlay, (panel_x, panel_y),
+                  (panel_x + panel_w, panel_y + panel_h),
+                  COLOR_BLACK, -1)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+
+    cv2.putText(image, "Guitar / Strum", (panel_x + 10, panel_y + 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_YELLOW, 1, cv2.LINE_AA)
+
+    cv2.putText(image, f"Strums: {guitar.strum_count}",
+                (panel_x + 10, panel_y + 45),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA)
+
+    # Show last strum direction with fade
+    if guitar.last_strum_direction:
+        elapsed = time.time() - guitar.last_strum_time
+        if elapsed < 1.0:
+            alpha = max(0, 1.0 - elapsed)
+            color = (
+                int(COLOR_CYAN[0] * alpha),
+                int(COLOR_CYAN[1] * alpha),
+                int(COLOR_CYAN[2] * alpha),
+            )
+            arrow = "v" if guitar.last_strum_direction == "down" else "^"
+            cv2.putText(image, f"Last: {arrow} {guitar.last_strum_direction}",
+                        (panel_x + 10, panel_y + 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+    # Perpendicular distance bar (visual)
+    if guitar.perp_history:
+        latest = guitar.perp_history[-1]
+        bar_center_x = panel_x + panel_w // 2
+        bar_y = panel_y + 80
+        bar_half_w = 80
+        bar_val = int(np.clip(latest * 500, -bar_half_w, bar_half_w))
+
+        cv2.line(image, (bar_center_x, bar_y), (bar_center_x, bar_y),
+                 COLOR_WHITE, 1)
+        bar_color = COLOR_GREEN if bar_val >= 0 else COLOR_RED
+        cv2.line(image, (bar_center_x, bar_y),
+                 (bar_center_x + bar_val, bar_y),
+                 bar_color, 4, cv2.LINE_AA)
+
+
+# ---------------------------------------------------------------------------
+# Existing drawing helpers (unchanged)
+# ---------------------------------------------------------------------------
 def draw_hand_info_panel(
     image: np.ndarray,
     result: HandLandmarkerResult,
@@ -61,28 +390,17 @@ def draw_hand_info_panel(
         return
 
     num_hands = len(result.hand_landmarks)
-
-    # Panel dimensions
     panel_w = 280
     panel_h = 40 + num_hands * 60
     panel_x, panel_y = 10, 10
 
-    # Draw translucent background
     overlay = image.copy()
-    cv2.rectangle(
-        overlay,
-        (panel_x, panel_y),
-        (panel_x + panel_w, panel_y + panel_h),
-        COLOR_BLACK,
-        -1,
-    )
+    cv2.rectangle(overlay, (panel_x, panel_y),
+                  (panel_x + panel_w, panel_y + panel_h), COLOR_BLACK, -1)
     cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
 
-    # Title
-    cv2.putText(
-        image, "Detected Hands", (panel_x + 10, panel_y + 25),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1, cv2.LINE_AA,
-    )
+    cv2.putText(image, "Detected Hands", (panel_x + 10, panel_y + 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1, cv2.LINE_AA)
 
     for idx in range(num_hands):
         hand_landmarks = result.hand_landmarks[idx]
@@ -93,83 +411,65 @@ def draw_hand_info_panel(
         score = handedness[0].score
         y_offset = panel_y + 55 + idx * 60
 
-        # Hand label and confidence
-        cv2.putText(
-            image, f"Hand {idx + 1}: {label} ({score:.0%})",
-            (panel_x + 15, y_offset),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA,
-        )
+        cv2.putText(image, f"Hand {idx + 1}: {label} ({score:.0%})",
+                    (panel_x + 15, y_offset),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
-        # Wrist position
         wrist = hand_landmarks[0]
-        cv2.putText(
-            image,
-            f"Wrist: ({wrist.x:.2f}, {wrist.y:.2f}, {wrist.z:.2f})",
-            (panel_x + 15, y_offset + 20),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_WHITE, 1, cv2.LINE_AA,
-        )
+        cv2.putText(image,
+                    f"Wrist: ({wrist.x:.2f}, {wrist.y:.2f}, {wrist.z:.2f})",
+                    (panel_x + 15, y_offset + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_WHITE, 1, cv2.LINE_AA)
 
 
 def draw_fingertip_labels(
-    image: np.ndarray,
-    hand_landmarks: list,
-    hand_idx: int,
+    image: np.ndarray, hand_landmarks: list, hand_idx: int,
 ) -> None:
     """Draw labels at each fingertip."""
     h, w, _ = image.shape
     color = HAND_COLORS[hand_idx % len(HAND_COLORS)]
-
     fingertip_indices = [4, 8, 12, 16, 20]
     fingertip_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
 
     for tip_idx, name in zip(fingertip_indices, fingertip_names):
         lm = hand_landmarks[tip_idx]
         cx, cy = int(lm.x * w), int(lm.y * h)
-
         text_size = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
-        cv2.rectangle(
-            image,
-            (cx - 2, cy - text_size[1] - 6),
-            (cx + text_size[0] + 4, cy + 2),
-            COLOR_BLACK, -1,
-        )
-        cv2.putText(
-            image, name, (cx, cy - 4),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA,
-        )
+        cv2.rectangle(image, (cx - 2, cy - text_size[1] - 6),
+                      (cx + text_size[0] + 4, cy + 2), COLOR_BLACK, -1)
+        cv2.putText(image, name, (cx, cy - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
 
 
 def draw_skeleton_only(
-    image: np.ndarray,
-    hand_landmarks: list,
-    hand_idx: int,
+    image: np.ndarray, hand_landmarks: list, hand_idx: int,
 ) -> None:
     """Draw only thin skeleton connections without landmark dots."""
     h, w, _ = image.shape
     color = HAND_COLORS[hand_idx % len(HAND_COLORS)]
-
     for connection in HandLandmarksConnections.HAND_CONNECTIONS:
         start = hand_landmarks[connection.start]
         end = hand_landmarks[connection.end]
-
         x1, y1 = int(start.x * w), int(start.y * h)
         x2, y2 = int(end.x * w), int(end.y * h)
-
         cv2.line(image, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 def main() -> None:
-    """Run real-time hand landmark detection."""
-    # Verify model exists
+    """Run real-time hand landmark detection with guitar line + strum."""
     if not Path(MODEL_PATH).exists():
         print(f"Error: Model not found at {MODEL_PATH}")
         print("Download it with:")
         print("  curl -L -o hand_landmarker.task \\")
-        print("    https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task")
+        print("    https://storage.googleapis.com/mediapipe-models/"
+              "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task")
         return
 
-    print("Starting MediaPipe Hand Landmark Detection...")
-    print("Controls: ESC/q = Quit | f = Toggle FPS | m = Cycle display mode")
+    print("Starting Air Guitar — Hand Landmark Detection + Strum")
+    print("Controls: ESC/q = Quit | f = Toggle FPS | m = Cycle mode")
 
     # Shared state for LIVE_STREAM callback
     latest_result: HandLandmarkerResult | None = None
@@ -184,7 +484,6 @@ def main() -> None:
         with result_lock:
             latest_result = result
 
-    # Create HandLandmarker
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
         running_mode=RunningMode.LIVE_STREAM,
@@ -200,7 +499,6 @@ def main() -> None:
         print("Error: Could not open webcam.")
         return
 
-    # Set camera resolution
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -210,68 +508,95 @@ def main() -> None:
     fps = 0.0
     frame_timestamp_ms = 0
 
+    guitar = GuitarState()
+
     with HandLandmarker.create_from_options(options) as landmarker:
         while cap.isOpened():
             success, frame = cap.read()
             if not success:
-                print("Ignoring empty camera frame.")
                 continue
 
-            # Flip horizontally for selfie-view
             frame = cv2.flip(frame, 1)
 
-            # Convert to MediaPipe Image and detect
-            frame_timestamp_ms += 33  # ~30fps
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            frame_timestamp_ms += 33
+            mp_image = mp.Image(
+                image_format=mp.ImageFormat.SRGB,
+                data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+            )
             landmarker.detect_async(mp_image, frame_timestamp_ms)
 
-            # Get the latest result
             with result_lock:
                 result = latest_result
 
-            # Draw hand landmarks
+            right_hand_lm = None
+
             if result and result.hand_landmarks:
+                # Draw hand landmarks
                 for idx, hand_landmarks in enumerate(result.hand_landmarks):
                     if display_mode == MODE_SKELETON:
                         draw_skeleton_only(frame, hand_landmarks, idx)
                     else:
-                        # Use MediaPipe drawing utilities
                         drawing_utils.draw_landmarks(
-                            frame,
-                            hand_landmarks,
+                            frame, hand_landmarks,
                             HandLandmarksConnections.HAND_CONNECTIONS,
                             drawing_styles.get_default_hand_landmarks_style(),
                             drawing_styles.get_default_hand_connections_style(),
                         )
-
                     if display_mode == MODE_FULL:
                         draw_fingertip_labels(frame, hand_landmarks, idx)
 
-                # Draw info panel
                 draw_hand_info_panel(frame, result)
 
-            # Calculate and display FPS
+                # --- Guitar logic ---
+                left_lm, right_lm = identify_hands(result)
+
+                if left_lm is not None:
+                    raw_left = landmark_to_vec3(left_lm[WRIST])
+                    guitar.left_wrist = smooth_vec3(
+                        guitar.left_wrist, raw_left, SMOOTH_ALPHA,
+                    )
+
+                if right_lm is not None:
+                    raw_right = landmark_to_vec3(right_lm[WRIST])
+                    guitar.right_wrist = smooth_vec3(
+                        guitar.right_wrist, raw_right, SMOOTH_ALPHA,
+                    )
+                    right_hand_lm = right_lm
+
+                # Strum detection (need both hands)
+                if (guitar.left_wrist is not None
+                        and guitar.right_wrist is not None
+                        and right_lm is not None):
+                    fingertip_centroid = get_fingertip_centroid(right_lm)
+                    perp = signed_perp_distance_3d(
+                        fingertip_centroid, guitar.left_wrist, guitar.right_wrist,
+                    )
+                    strum = detect_strum(guitar, perp)
+                    if strum:
+                        print(f"STRUM {strum.upper()} (#{guitar.strum_count})")
+
+            # Draw guitar line (even if one hand lost — uses smoothed positions)
+            draw_guitar_line(frame, guitar, right_hand_lm)
+            draw_strum_panel(frame, guitar)
+
+            # FPS
             current_time = time.time()
-            fps = 0.9 * fps + 0.1 * (1.0 / max(current_time - prev_time, 1e-6))
+            fps = 0.9 * fps + 0.1 / max(current_time - prev_time, 1e-6)
             prev_time = current_time
 
             if show_fps:
-                cv2.putText(
-                    frame, f"FPS: {fps:.0f}", (frame.shape[1] - 130, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2, cv2.LINE_AA,
-                )
+                cv2.putText(frame, f"FPS: {fps:.0f}",
+                            (frame.shape[1] - 130, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN,
+                            2, cv2.LINE_AA)
 
-            # Display mode indicator
-            cv2.putText(
-                frame, f"Mode: {MODE_NAMES[display_mode]}",
-                (frame.shape[1] - 200, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA,
-            )
+            cv2.putText(frame, f"Mode: {MODE_NAMES[display_mode]}",
+                        (frame.shape[1] - 200, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE,
+                        1, cv2.LINE_AA)
 
-            # Show the frame
-            cv2.imshow("MediaPipe Hand Landmark Detection", frame)
+            cv2.imshow("Air Guitar — MediaPipe", frame)
 
-            # Handle key presses
             key = cv2.waitKey(5) & 0xFF
             if key == 27 or key == ord("q"):
                 break
@@ -282,7 +607,7 @@ def main() -> None:
 
     cap.release()
     cv2.destroyAllWindows()
-    print("Hand landmark detection stopped.")
+    print(f"Done. Total strums detected: {guitar.strum_count}")
 
 
 if __name__ == "__main__":
