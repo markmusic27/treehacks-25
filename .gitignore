@@ -1,0 +1,5 @@
+/MIDI_TO_SOUNDFONT/midi_output/
+/MIDI_TO_SOUNDFONT/soundfonts/
+/MIDI_TO_SOUNDFONT/__pycache__/
+*.sf2
+.DS_Store
