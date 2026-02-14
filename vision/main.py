@@ -215,8 +215,10 @@ def detect_strum(guitar: GuitarState, perp_dist: float) -> str | None:
             guitar.strum_cooldown = STRUM_COOLDOWN_FRAMES
             guitar.last_strum_direction = direction
             guitar.last_strum_time = time.time()
-            guitar.strum_count += 1
-            guitar.strum_flash_frames = 6
+            # Only count and flash for down strums
+            if direction == "down":
+                guitar.strum_count += 1
+                guitar.strum_flash_frames = 6
             guitar.prev_perp_dist = perp_dist
             return direction
 
@@ -572,8 +574,8 @@ def main() -> None:
                         fingertip_centroid, guitar.left_wrist, guitar.right_wrist,
                     )
                     strum = detect_strum(guitar, perp)
-                    if strum:
-                        print(f"STRUM {strum.upper()} (#{guitar.strum_count})")
+                    if strum == "down":
+                        print(f"STRUM DOWN (#{guitar.strum_count})")
 
             # Draw guitar line (even if one hand lost — uses smoothed positions)
             draw_guitar_line(frame, guitar, right_hand_lm)
