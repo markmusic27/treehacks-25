@@ -69,8 +69,8 @@ SWAP_HANDS = True
 STRUM_VELOCITY_THRESHOLD = 0.02   # Min perpendicular velocity to count as strum
 STRUM_COOLDOWN_FRAMES = 8         # Ignore strums within this many frames of last
 
-# Fingertip landmark indices (index, middle, ring, pinky tips)
-FINGERTIP_INDICES = [8, 12, 16, 20]
+# Strum tracking landmark — index fingertip only for more reliable detection
+STRUM_LANDMARK_INDEX = 8  # INDEX_FINGER_TIP
 
 # Wrist landmark index
 WRIST = 0
@@ -149,16 +149,10 @@ def smooth_vec3(old: Vec3 | None, new: Vec3, alpha: float) -> Vec3:
     )
 
 
-def get_fingertip_centroid(hand_landmarks: list) -> Vec3:
-    """Average position of fingertip landmarks."""
-    cx, cy, cz = 0.0, 0.0, 0.0
-    for idx in FINGERTIP_INDICES:
-        lm = hand_landmarks[idx]
-        cx += lm.x
-        cy += lm.y
-        cz += lm.z
-    n = len(FINGERTIP_INDICES)
-    return Vec3(cx / n, cy / n, cz / n)
+def get_strum_point(hand_landmarks: list) -> Vec3:
+    """Get the strum tracking point (index fingertip)."""
+    lm = hand_landmarks[STRUM_LANDMARK_INDEX]
+    return Vec3(lm.x, lm.y, lm.z)
 
 
 def signed_perp_distance_3d(point: Vec3, line_start: Vec3, line_end: Vec3) -> float:
@@ -316,7 +310,7 @@ def draw_guitar_line(
 
     # --- Draw fingertip centroid if right hand is available ---
     if right_hand_landmarks is not None:
-        centroid = get_fingertip_centroid(right_hand_landmarks)
+        centroid = get_strum_point(right_hand_landmarks)
         cx, cy = centroid.to_pixel(w, h)
         cv2.circle(image, (cx, cy), 5, COLOR_CYAN, -1, cv2.LINE_AA)
 
@@ -569,9 +563,9 @@ def main() -> None:
                 if (guitar.left_wrist is not None
                         and guitar.right_wrist is not None
                         and right_lm is not None):
-                    fingertip_centroid = get_fingertip_centroid(right_lm)
+                    strum_point = get_strum_point(right_lm)
                     perp = signed_perp_distance_3d(
-                        fingertip_centroid, guitar.left_wrist, guitar.right_wrist,
+                        strum_point, guitar.left_wrist, guitar.right_wrist,
                     )
                     strum = detect_strum(guitar, perp)
                     if strum == "down":
