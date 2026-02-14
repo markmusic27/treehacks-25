@@ -1,7 +1,7 @@
 [project]
 name = "vision"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Air instrument system — hand tracking + phone fretboard + MIDI audio"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,4 +9,5 @@ dependencies = [
     "opencv-python",
     "numpy",
     "websockets",
+    "pyfluidsynth",
 ]
