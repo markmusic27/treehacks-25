@@ -113,9 +113,9 @@ class FluidSynthPlayer:
         self.fs.start(driver="coreaudio")
 
         # ── Load the soundfont ──────────────────────────────────────────
-        self.sfid = self.fs.sfload(soundfont_path)
-        if self.sfid == -1:
-            raise RuntimeError(f"Failed to load SoundFont: {soundfont_path}")
+        # soundfonts dict maps sfid -> path for all loaded soundfonts
+        self.soundfonts = {}
+        self.sfid = self._load_soundfont(soundfont_path)
 
         # ── Set the default channel and instrument ──────────────────────
         self.channel = 0  # MIDI channel 0 (channels are 0-15)
@@ -126,6 +126,55 @@ class FluidSynthPlayer:
 
         sf_name = os.path.basename(soundfont_path)
         print(f"[FluidSynth] Initialized — soundfont: {sf_name}, gain: {gain}")
+
+    def _load_soundfont(self, soundfont_path):
+        """Load an SF2 file and track it. Returns the soundfont ID."""
+        soundfont_path = os.path.abspath(soundfont_path)
+        if not os.path.exists(soundfont_path):
+            raise FileNotFoundError(f"SoundFont not found: {soundfont_path}")
+
+        sfid = self.fs.sfload(soundfont_path)
+        if sfid == -1:
+            raise RuntimeError(f"Failed to load SoundFont: {soundfont_path}")
+
+        self.soundfonts[sfid] = soundfont_path
+        return sfid
+
+    def load_additional_soundfont(self, soundfont_path):
+        """
+        Load an additional soundfont file alongside the existing one(s).
+
+        FluidSynth supports multiple soundfonts simultaneously.
+        Use set_instrument_from_soundfont() to pick instruments from
+        a specific soundfont.
+
+        Args:
+            soundfont_path (str): Path to the .sf2 file.
+
+        Returns:
+            int: The soundfont ID (use with set_instrument_from_soundfont).
+        """
+        sfid = self._load_soundfont(soundfont_path)
+        sf_name = os.path.basename(soundfont_path)
+        print(f"[FluidSynth] Loaded additional soundfont: {sf_name} (id={sfid})")
+        return sfid
+
+    def set_instrument_from_soundfont(self, sfid, bank, program, channel=None):
+        """
+        Select an instrument from a specific loaded soundfont.
+
+        Args:
+            sfid (int): Soundfont ID (returned by load_additional_soundfont).
+            bank (int): Bank number (usually 0 for melodic, 128 for percussion).
+            program (int): Program/preset number (0-127).
+            channel (int|None): MIDI channel. Defaults to self.channel.
+        """
+        if channel is None:
+            channel = self.channel
+        self.fs.program_select(channel, sfid, bank, program)
+        sf_name = os.path.basename(self.soundfonts.get(sfid, "unknown"))
+        print(f"[FluidSynth] Instrument: bank {bank}, program {program} "
+              f"from {sf_name} on channel {channel}")
 
     # ── Instrument control ──────────────────────────────────────────────
 
