@@ -20,7 +20,6 @@ import time
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import cv2
@@ -83,10 +82,6 @@ WRIST = 0
 
 # Network
 WS_PORT = 8765
-HTTP_PORT = 8766
-
-# Path to built fretboard app (Next.js static export)
-FRETBOARD_DIST = Path(__file__).parent / "fretboard" / "out"
 
 
 # ---------------------------------------------------------------------------
@@ -558,17 +553,6 @@ def start_ws_server(phone: PhoneState, phone_lock: threading.Lock) -> None:
     loop.run_until_complete(run())
 
 
-def start_http_server() -> None:
-    """Serve the fretboard app's built files over HTTP."""
-    import functools
-
-    dist_path = str(FRETBOARD_DIST)
-
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=dist_path)
-    httpd = HTTPServer(("0.0.0.0", HTTP_PORT), handler)
-    print(f"HTTP server serving fretboard at http://0.0.0.0:{HTTP_PORT}")
-    httpd.serve_forever()
-
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -606,14 +590,8 @@ def main() -> None:
     ws_thread = threading.Thread(target=start_ws_server, args=(phone, phone_lock), daemon=True)
     ws_thread.start()
 
-    # Start HTTP server for fretboard app (if built)
-    if FRETBOARD_DIST.exists():
-        http_thread = threading.Thread(target=start_http_server, daemon=True)
-        http_thread.start()
-    else:
-        print(f"Note: Fretboard app not built yet ({FRETBOARD_DIST}).")
-        print("  Run: cd fretboard && npm run build")
-        print(f"  Or use Vite dev server: cd fretboard && npm run dev")
+    print("Note: Run the fretboard Expo app separately:")
+    print("  cd fretboard && npx expo start")
 
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
