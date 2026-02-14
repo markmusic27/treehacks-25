@@ -156,7 +156,7 @@ export default function SelectPage() {
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {instruments.map((instrument, i) => (
+                {instruments.slice(0, 8).map((instrument, i) => (
                   <InstrumentCard
                     key={instrument.id}
                     instrument={instrument}

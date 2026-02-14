@@ -4,24 +4,25 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #131F24;
-  --foreground: #FFFFFF;
-  --card: #1A2E35;
-  --card-foreground: #FFFFFF;
-  --popover: #1A2E35;
-  --popover-foreground: #FFFFFF;
+  /* Duolingo-inspired palette */
+  --background: #FFFFFF;
+  --foreground: #4B4B4B;
+  --card: #FFFFFF;
+  --card-foreground: #4B4B4B;
+  --popover: #FFFFFF;
+  --popover-foreground: #4B4B4B;
   --primary: #58CC02;
   --primary-foreground: #FFFFFF;
-  --secondary: #1A2E35;
-  --secondary-foreground: #FFFFFF;
-  --muted: #233A42;
-  --muted-foreground: #AFAFAF;
-  --accent: #1CB0F6;
+  --secondary: #E5E5E5;
+  --secondary-foreground: #4B4B4B;
+  --muted: #F7F7F7;
+  --muted-foreground: #777777;
+  --accent: #89E219;
   --accent-foreground: #FFFFFF;
   --destructive: #FF4B4B;
   --destructive-foreground: #FFFFFF;
-  --border: #2A4A54;
-  --input: #233A42;
+  --border: #E5E5E5;
+  --input: #E5E5E5;
   --ring: #58CC02;
   --chart-1: #58CC02;
   --chart-2: #1CB0F6;
@@ -30,25 +31,33 @@
   --chart-5: #FFC800;
   --radius: 1rem;
 
-  /* Maestro custom tokens */
+  /* Maestro / Duolingo custom tokens */
   --maestro-green: #58CC02;
-  --maestro-green-dark: #58A700;
+  --maestro-green-dark: #43C000;
+  --maestro-mask-green: #89E219;
   --maestro-blue: #1CB0F6;
   --maestro-purple: #CE82FF;
   --maestro-orange: #FF9600;
   --maestro-red: #FF4B4B;
   --maestro-gold: #FFC800;
-  --maestro-surface: #1A2E35;
-  --maestro-surface-hover: #233A42;
-  --maestro-bg: #131F24;
+  --maestro-humpback: #2B70C9;
+  --maestro-eel: #4B4B4B;
+  --maestro-wolf: #777777;
+  --maestro-hare: #AFAFAF;
+  --maestro-swan: #E5E5E5;
+  --maestro-polar: #F7F7F7;
+  --maestro-snow: #FFFFFF;
+  --maestro-surface: #F7F7F7;
+  --maestro-surface-hover: #E5E5E5;
+  --maestro-bg: #FFFFFF;
 
-  --sidebar: #0F191D;
-  --sidebar-foreground: #FFFFFF;
+  --sidebar: #F7F7F7;
+  --sidebar-foreground: #4B4B4B;
   --sidebar-primary: #58CC02;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #1A2E35;
-  --sidebar-accent-foreground: #FFFFFF;
-  --sidebar-border: #2A4A54;
+  --sidebar-accent: #E5E5E5;
+  --sidebar-accent-foreground: #4B4B4B;
+  --sidebar-border: #E5E5E5;
   --sidebar-ring: #58CC02;
 }
 
@@ -92,14 +101,22 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Maestro custom color tokens */
+  /* Maestro / Duolingo custom color tokens */
   --color-maestro-green: var(--maestro-green);
   --color-maestro-green-dark: var(--maestro-green-dark);
+  --color-maestro-mask-green: var(--maestro-mask-green);
   --color-maestro-blue: var(--maestro-blue);
   --color-maestro-purple: var(--maestro-purple);
   --color-maestro-orange: var(--maestro-orange);
   --color-maestro-red: var(--maestro-red);
   --color-maestro-gold: var(--maestro-gold);
+  --color-maestro-humpback: var(--maestro-humpback);
+  --color-maestro-eel: var(--maestro-eel);
+  --color-maestro-wolf: var(--maestro-wolf);
+  --color-maestro-hare: var(--maestro-hare);
+  --color-maestro-swan: var(--maestro-swan);
+  --color-maestro-polar: var(--maestro-polar);
+  --color-maestro-snow: var(--maestro-snow);
   --color-maestro-surface: var(--maestro-surface);
   --color-maestro-surface-hover: var(--maestro-surface-hover);
   --color-maestro-bg: var(--maestro-bg);
@@ -116,9 +133,9 @@
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--maestro-bg); }
-::-webkit-scrollbar-thumb { background: var(--maestro-surface-hover); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border); }
+::-webkit-scrollbar-track { background: var(--maestro-polar); }
+::-webkit-scrollbar-thumb { background: var(--maestro-swan); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--maestro-hare); }
 
 /* ========= ANIMATIONS ========= */
 
@@ -215,7 +232,7 @@
   100% { background-position: 0% 50%; }
 }
 .text-gradient-animated {
-  background: linear-gradient(90deg, var(--maestro-green), var(--maestro-blue), var(--maestro-purple), var(--maestro-gold), var(--maestro-green));
+  background: linear-gradient(90deg, var(--maestro-green), var(--maestro-mask-green), var(--maestro-green-dark), var(--maestro-green));
   background-size: 300% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

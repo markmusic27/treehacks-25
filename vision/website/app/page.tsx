@@ -3,104 +3,90 @@
 import { motion } from "framer-motion"
 import Link from "next/link"
 import MaestroSpirit from "@/components/MaestroSpirit"
-import RemixDJ from "@/components/RemixDJ"
-import CulturalInstructor from "@/components/CulturalInstructor"
 
-const features = [
-  {
-    href: "/select",
-    color: "var(--maestro-green)",
-    bg: "rgba(88,204,2,0.12)",
-    title: "Pick & Play",
-    description: "Choose your instrument and favorite song, then start performing",
-    Character: MaestroSpirit,
-  },
-  {
-    href: "/remixes",
-    color: "var(--maestro-purple)",
-    bg: "rgba(206,130,255,0.12)",
-    title: "AI Remixes",
-    description: "Last practiced songs — create Juno remixes in Jazz, Lo-Fi, EDM & more",
-    Character: RemixDJ,
-  },
-  {
-    href: "/learn",
-    color: "var(--maestro-gold)",
-    bg: "rgba(255,200,0,0.12)",
-    title: "Learn & Grow",
-    description: "Tutoring: instruments, artists, songs — comprehensive guides",
-    Character: CulturalInstructor,
-  },
-]
-
-const stagger = { animate: { transition: { staggerChildren: 0.12 } } }
 const fadeUp = {
-  initial: { opacity: 0, y: 40, scale: 0.95 },
+  initial: { opacity: 0, y: 30 },
   animate: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    transition: { type: "spring", stiffness: 200, damping: 20 },
+    transition: { type: "spring", stiffness: 180, damping: 20 },
   },
 }
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-background px-6 py-16">
-      {/* Maestro logo */}
+    <main className="min-h-screen flex flex-col items-center justify-center bg-background px-6 py-16 relative overflow-hidden">
+      {/* Mascot */}
       <motion.div
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: "easeOut" }}
-        className="mb-12 md:mb-16"
+        initial={{ opacity: 0, scale: 0.8, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 200, damping: 18, delay: 0.1 }}
+        className="relative z-10 mb-6"
       >
-        <h1 className="text-5xl md:text-7xl font-black text-balance tracking-tight text-gradient-animated">
+        <MaestroSpirit width={180} />
+      </motion.div>
+
+      {/* Title */}
+      <motion.div
+        variants={fadeUp}
+        initial="initial"
+        animate="animate"
+        className="relative z-10 text-center mb-4"
+      >
+        <h1 className="text-5xl md:text-7xl font-black tracking-tight text-[#58CC02]">
           Maestro
         </h1>
       </motion.div>
 
-      {/* 3 main capabilities */}
-      <motion.div
-        variants={stagger}
-        initial="initial"
-        animate="animate"
-        className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-3xl"
+      {/* Tagline */}
+      <motion.p
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.25, duration: 0.5 }}
+        className="relative z-10 text-lg md:text-xl text-[#777777] text-center max-w-md mb-10 font-semibold"
       >
-        {features.map((feature) => {
-          const Character = feature.Character
-          return (
-            <Link key={feature.title} href={feature.href}>
-              <motion.div
-                variants={fadeUp}
-                whileHover={{
-                  scale: 1.05,
-                  y: -8,
-                  boxShadow: `0 12px 40px ${feature.color}20`,
-                }}
-                whileTap={{ scale: 0.97 }}
-                className="relative flex flex-col items-center gap-3 p-6 rounded-2xl border border-border overflow-hidden cursor-pointer"
-                style={{ backgroundColor: feature.bg }}
-              >
-                <motion.div
-                  className="absolute inset-0 opacity-0"
-                  whileHover={{ opacity: 1 }}
-                  style={{
-                    background: `radial-gradient(circle at 50% 0%, ${feature.color}15, transparent 70%)`,
-                  }}
-                />
-                <div className="relative z-10 flex justify-center min-h-[120px] items-center">
-                  <Character width={120} />
-                </div>
-                <h2 className="font-bold text-foreground relative z-10 text-lg">
-                  {feature.title}
-                </h2>
-                <p className="text-sm text-muted-foreground text-center leading-relaxed relative z-10">
-                  {feature.description}
-                </p>
-              </motion.div>
-            </Link>
-          )
-        })}
+        Learn any instrument. Play your favorite songs. Powered by AI.
+      </motion.p>
+
+      {/* CTA Button - Duolingo style */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4, type: "spring", stiffness: 200, damping: 20 }}
+        className="relative z-10"
+      >
+        <Link href="/select">
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            className="
+              relative px-14 py-4 rounded-2xl text-white font-extrabold text-lg md:text-xl uppercase tracking-wider
+              bg-[#58CC02] border-b-4 border-[#43C000]
+              hover:bg-[#61D800] active:border-b-0 active:mt-1
+              transition-all duration-75 cursor-pointer
+              shadow-none
+            "
+          >
+            Start Playing
+          </motion.button>
+        </Link>
+      </motion.div>
+
+      {/* Secondary info pills */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6, duration: 0.6 }}
+        className="relative z-10 flex flex-wrap justify-center gap-3 mt-10"
+      >
+        {["Guitar", "Violin", "Cello", "Ukulele", "Bass", "Harp", "Banjo"].map((instrument) => (
+          <span
+            key={instrument}
+            className="px-4 py-2 rounded-full bg-[#F7F7F7] text-[#777777] text-sm font-bold border-2 border-[#E5E5E5]"
+          >
+            {instrument}
+          </span>
+        ))}
       </motion.div>
     </main>
   )
