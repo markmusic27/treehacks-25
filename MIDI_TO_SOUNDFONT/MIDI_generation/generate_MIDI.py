@@ -26,6 +26,8 @@ Usage (as a module):
 import os
 import sys
 import argparse
+import subprocess
+import glob
 from pathlib import Path
 
 
@@ -41,6 +43,9 @@ def audio_to_midi(
     """
     Convert an audio file to MIDI using Basic Pitch.
 
+    Tries the Python API first. If that fails (model loading issues),
+    falls back to the basic-pitch CLI which is more robust.
+
     Args:
         audio_path (str): Path to the input audio file (WAV, MP3, FLAC, OGG).
         output_dir (str): Directory to save the output MIDI file. Created if needed.
@@ -55,27 +60,53 @@ def audio_to_midi(
     Returns:
         str: Path to the generated MIDI file.
     """
-    # ── Import basic-pitch here so the module loads fast ────────────────
-    # (the model takes a moment to initialize)
-    from basic_pitch.inference import predict
-    from basic_pitch import ICASSP_2022_MODEL_PATH
-
     # ── Validate input ──────────────────────────────────────────────────
     audio_path = os.path.abspath(audio_path)
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
+    os.makedirs(output_dir, exist_ok=True)
     audio_name = Path(audio_path).stem  # filename without extension
     print(f"[Basic Pitch] Processing: {os.path.basename(audio_path)}")
 
-    # ── Run the model ───────────────────────────────────────────────────
-    # predict() returns:
-    #   model_output  — raw neural network output (numpy arrays)
-    #   midi_data     — a pretty_midi.PrettyMIDI object
-    #   note_events   — list of (start_time, end_time, pitch, velocity, [pitch_bend])
+    # ── Try Python API first, fall back to CLI ──────────────────────────
+    try:
+        midi_path = _predict_with_api(
+            audio_path, output_dir, audio_name,
+            onset_threshold, frame_threshold,
+            minimum_note_length, minimum_frequency, maximum_frequency,
+        )
+    except Exception as api_err:
+        print(f"[Basic Pitch] Python API failed: {api_err}")
+        print(f"[Basic Pitch] Falling back to CLI...")
+        midi_path = _predict_with_cli(
+            audio_path, output_dir, audio_name,
+            onset_threshold, frame_threshold,
+            minimum_note_length, minimum_frequency, maximum_frequency,
+        )
+
+    print(f"[Basic Pitch] MIDI saved to: {midi_path}")
+    return midi_path
+
+
+def _predict_with_api(
+    audio_path, output_dir, audio_name,
+    onset_threshold, frame_threshold,
+    minimum_note_length, minimum_frequency, maximum_frequency,
+):
+    """Use the basic-pitch Python API (faster, but can have model loading issues)."""
+    from basic_pitch.inference import predict
+    from basic_pitch import ICASSP_2022_MODEL_PATH
+    from pathlib import Path
+
+    # Try ONNX model first (works on Python 3.12 where TF is incompatible),
+    # then fall back to the default model path (TF SavedModel).
+    onnx_model = Path(ICASSP_2022_MODEL_PATH).with_suffix(".onnx")
+    model_path = onnx_model if onnx_model.exists() else ICASSP_2022_MODEL_PATH
+
     model_output, midi_data, note_events = predict(
         audio_path,
-        model_or_model_path=ICASSP_2022_MODEL_PATH,
+        model_or_model_path=model_path,
         onset_threshold=onset_threshold,
         frame_threshold=frame_threshold,
         minimum_note_length=minimum_note_length,
@@ -83,17 +114,75 @@ def audio_to_midi(
         maximum_frequency=maximum_frequency,
     )
 
-    # ── Save the MIDI file ──────────────────────────────────────────────
-    os.makedirs(output_dir, exist_ok=True)
     midi_filename = f"{audio_name}_basic_pitch.mid"
     midi_path = os.path.join(output_dir, midi_filename)
-
     midi_data.write(midi_path)
 
     num_notes = len(note_events)
     print(f"[Basic Pitch] Done! {num_notes} notes detected.")
-    print(f"[Basic Pitch] MIDI saved to: {midi_path}")
+    return midi_path
 
+
+def _predict_with_cli(
+    audio_path, output_dir, audio_name,
+    onset_threshold, frame_threshold,
+    minimum_note_length, minimum_frequency, maximum_frequency,
+):
+    """Use the basic-pitch CLI as a fallback (more robust across Python versions)."""
+    cmd = [
+        sys.executable, "-m", "basic_pitch",
+        output_dir,
+        audio_path,
+        "--onset-threshold", str(onset_threshold),
+        "--frame-threshold", str(frame_threshold),
+        "--minimum-note-length", str(minimum_note_length),
+    ]
+    if minimum_frequency is not None:
+        cmd += ["--minimum-frequency", str(minimum_frequency)]
+    if maximum_frequency is not None:
+        cmd += ["--maximum-frequency", str(maximum_frequency)]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+    if result.returncode != 0:
+        # If python -m basic_pitch fails, try the basic-pitch command directly
+        # Build a fresh command to avoid duplicating args
+        cmd_fallback = [
+            "basic-pitch",
+            output_dir,
+            audio_path,
+            "--onset-threshold", str(onset_threshold),
+            "--frame-threshold", str(frame_threshold),
+            "--minimum-note-length", str(minimum_note_length),
+        ]
+        if minimum_frequency is not None:
+            cmd_fallback += ["--minimum-frequency", str(minimum_frequency)]
+        if maximum_frequency is not None:
+            cmd_fallback += ["--maximum-frequency", str(maximum_frequency)]
+
+        result = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"basic-pitch CLI failed:\n{result.stderr.strip()}"
+            )
+
+    # Find the generated MIDI file (basic-pitch CLI names it {audio_name}_basic_pitch.mid)
+    midi_filename = f"{audio_name}_basic_pitch.mid"
+    midi_path = os.path.join(output_dir, midi_filename)
+
+    if not os.path.exists(midi_path):
+        # Fallback: find the most recent .mid file in output_dir
+        mid_files = sorted(
+            glob.glob(os.path.join(output_dir, "*.mid")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        if mid_files:
+            midi_path = mid_files[0]
+        else:
+            raise RuntimeError("basic-pitch ran but no .mid file was generated.")
+
+    print(f"[Basic Pitch] Done (via CLI)!")
     return midi_path
 
 
