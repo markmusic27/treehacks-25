@@ -29,10 +29,13 @@ final class WebSocketManager {
     }
 
     func send(touches: [[String: Any]]) {
+        send(data: ["touches": touches])
+    }
+
+    func send(data: [String: Any]) {
         guard isConnected else { return }
-        let payload: [String: Any] = ["touches": touches]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let jsonString = String(data: data, encoding: .utf8) else { return }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data),
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
         webSocketTask?.send(.string(jsonString)) { _ in }
     }
 
