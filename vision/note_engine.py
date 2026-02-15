@@ -3,14 +3,14 @@ Note engine: maps air-instrument inputs to MIDI note parameters.
 
 Inputs
 ------
-- ``string_index`` : which string is pressed on the phone fretboard
-- ``fret_y``       : touch y-position (0-1) → semitone offset within an octave
-- ``hand_distance``: normalized wrist-to-wrist distance → octave
+- ``string_index``  : which string is pressed on the phone fretboard
+- ``fret_y``        : touch y-position (0-1) → semitone offset within an octave
+- ``pole_position`` : hand position along the physical pole (0-1) → octave
 - ``strum_velocity``: raw perpendicular crossing speed → MIDI velocity + duration
 
 Output
 ------
-A ``(midi_note, velocity, duration)`` tuple ready for an audio engine.
+A ``NoteResult`` with MIDI note, velocity, duration, and human-readable name.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from config import (
-    HAND_DISTANCE_MAX,
-    HAND_DISTANCE_MIN,
     MIDI_VELOCITY_MAX,
     MIDI_VELOCITY_MIN,
     NOTE_DURATION_MAX,
@@ -76,7 +74,7 @@ class NoteEngine:
         self,
         string_index: int,
         fret_y: float,
-        hand_distance: float,
+        pole_position: float,
         strum_velocity: float,
     ) -> NoteResult:
         """
@@ -88,9 +86,9 @@ class NoteEngine:
             0-based index of the active string on the fretboard.
         fret_y : float
             Normalised touch y-position on the phone (0 = top, 1 = bottom).
-        hand_distance : float
-            Euclidean distance between left and right wrists in normalised
-            screen coordinates.
+        pole_position : float
+            Hand position along the physical pole (0.0 = endpoint A,
+            1.0 = endpoint B).  Determines the octave.
         strum_velocity : float
             Raw perpendicular crossing velocity from strum detection.
 
@@ -100,7 +98,7 @@ class NoteEngine:
         """
         base_offset = self._string_to_offset(string_index)
         fret_semitones = self._fret_to_semitones(fret_y)
-        octave = self._distance_to_octave(hand_distance)
+        octave = self._pole_position_to_octave(pole_position)
         velocity = self._velocity_to_midi(strum_velocity)
         duration = self._velocity_to_duration(strum_velocity)
 
@@ -134,19 +132,16 @@ class NoteEngine:
         return int(np.clip(fret_y * NUM_FRETS, 0, NUM_FRETS - 1))
 
     @staticmethod
-    def _distance_to_octave(hand_distance: float) -> int:
+    def _pole_position_to_octave(pole_position: float) -> int:
         """
-        Map normalised wrist-to-wrist distance to an octave number.
+        Map hand position along the pole to an octave number.
 
-        Greater distance → **lower** octave (arms spread = bass register).
+        ``pole_position`` is 0-1 where 0 = left end of pole, 1 = right end.
+        Position 0 (near the body / nut end) → high octave,
+        Position 1 (far end) → low octave.
         """
-        t = np.clip(
-            (hand_distance - HAND_DISTANCE_MIN)
-            / (HAND_DISTANCE_MAX - HAND_DISTANCE_MIN),
-            0.0,
-            1.0,
-        )
-        # Invert: t=0 (close) → high octave, t=1 (far) → low octave
+        t = float(np.clip(pole_position, 0.0, 1.0))
+        # t=0 → high octave, t=1 → low octave
         octave = OCTAVE_MAX - t * (OCTAVE_MAX - OCTAVE_MIN)
         return int(round(octave))
 

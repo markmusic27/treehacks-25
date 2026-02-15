@@ -84,6 +84,24 @@ class FretboardState:
 
 
 # ---------------------------------------------------------------------------
+# Pole state (physical broomstick with tape markers)
+# ---------------------------------------------------------------------------
+@dataclass
+class PoleState:
+    """Tracks the detected pole endpoints and hand position along the pole."""
+
+    # Smoothed endpoint positions in pixel coordinates
+    end_a: tuple[int, int] | None = None  # left endpoint
+    end_b: tuple[int, int] | None = None  # right endpoint
+
+    # Whether the pole was detected this frame
+    detected: bool = False
+
+    # Hand position along the pole: 0.0 = endpoint A, 1.0 = endpoint B
+    position: float = 0.5
+
+
+# ---------------------------------------------------------------------------
 # Phone state
 # ---------------------------------------------------------------------------
 @dataclass

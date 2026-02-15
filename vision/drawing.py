@@ -24,7 +24,7 @@ from config import (
     WS_PORT,
 )
 from hand_tracking import get_strum_point, signed_perp_distance_3d
-from models import FretboardState, PhoneState
+from models import FretboardState, PhoneState, PoleState
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +356,64 @@ def draw_note_panel(image: np.ndarray, fretboard: FretboardState) -> None:
             (panel_x + 10, panel_y + 42 + i * 22),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, note_color, 1, cv2.LINE_AA,
         )
+
+
+# ---------------------------------------------------------------------------
+# Pole detection overlay
+# ---------------------------------------------------------------------------
+COLOR_MAGENTA = (255, 0, 255)  # BGR
+
+
+def draw_pole_overlay(
+    image: np.ndarray,
+    pole: PoleState,
+) -> None:
+    """Draw the detected pole line, endpoints, and hand position indicator."""
+    if pole.end_a is None or pole.end_b is None:
+        # Show "Pole: not detected" status
+        h, w, _ = image.shape
+        cv2.putText(
+            image, "Pole: NOT DETECTED", (w - 250, 90),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_RED, 1, cv2.LINE_AA,
+        )
+        return
+
+    ax, ay = pole.end_a
+    bx, by = pole.end_b
+
+    # Draw the pole line
+    cv2.line(image, (ax, ay), (bx, by), COLOR_MAGENTA, 3, cv2.LINE_AA)
+
+    # Endpoint circles
+    cv2.circle(image, (ax, ay), 10, COLOR_MAGENTA, -1, cv2.LINE_AA)
+    cv2.circle(image, (bx, by), 10, COLOR_MAGENTA, -1, cv2.LINE_AA)
+
+    # Endpoint labels
+    cv2.putText(
+        image, "A", (ax - 5, ay - 15),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA,
+    )
+    cv2.putText(
+        image, "B", (bx - 5, by - 15),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA,
+    )
+
+    # Hand position marker along the pole
+    t = pole.position
+    hx = int(ax + t * (bx - ax))
+    hy = int(ay + t * (by - ay))
+    cv2.circle(image, (hx, hy), 8, COLOR_GREEN, -1, cv2.LINE_AA)
+    cv2.circle(image, (hx, hy), 10, COLOR_WHITE, 2, cv2.LINE_AA)
+
+    # Position label
+    cv2.putText(
+        image, f"t={t:.2f}", (hx + 14, hy + 5),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_GREEN, 1, cv2.LINE_AA,
+    )
+
+    # Status text
+    h, w, _ = image.shape
+    cv2.putText(
+        image, f"Pole: OK  pos={t:.2f}", (w - 250, 90),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_MAGENTA, 1, cv2.LINE_AA,
+    )

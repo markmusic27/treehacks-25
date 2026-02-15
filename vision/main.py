@@ -46,6 +46,7 @@ from drawing import (
     draw_neck_line,
     draw_note_panel,
     draw_phone_panel,
+    draw_pole_overlay,
     draw_skeleton_only,
     draw_strum_panel,
 )
@@ -57,8 +58,9 @@ from hand_tracking import (
     signed_perp_distance_3d,
     smooth_vec3,
 )
-from models import FretboardState, PhoneState
+from models import FretboardState, PhoneState, PoleState
 from note_engine import NoteEngine
+from pole_detection import compute_pole_position, update_pole_state
 from websocket_server import start_ws_server
 
 
@@ -68,21 +70,16 @@ from websocket_server import start_ws_server
 def handle_strum(
     fretboard: FretboardState,
     phone: PhoneState,
+    pole: PoleState,
     strum_velocity: float,
     note_engine: NoteEngine,
     audio: AudioEngine,
 ) -> None:
     """
     Called on each detected down-strum.  Reads the current phone touches
-    and plays a note for every active string.
+    and pole position, then plays a note for every active string.
     """
-    if fretboard.left_wrist is None or fretboard.right_wrist is None:
-        return
-
-    # Hand distance (2-D, normalised screen coords)
-    dx = fretboard.left_wrist.x - fretboard.right_wrist.x
-    dy = fretboard.left_wrist.y - fretboard.right_wrist.y
-    hand_distance = (dx ** 2 + dy ** 2) ** 0.5
+    pole_pos = pole.position  # 0-1 along the physical pole
 
     active_touches = phone.touches
     if not active_touches:
@@ -90,7 +87,7 @@ def handle_strum(
         result = note_engine.compute_note(
             string_index=0,
             fret_y=0.0,
-            hand_distance=hand_distance,
+            pole_position=pole_pos,
             strum_velocity=strum_velocity,
         )
         audio.play_note(result.midi_note, result.velocity, result.duration)
@@ -100,7 +97,8 @@ def handle_strum(
         fretboard.last_note_time = time.time()
         print(
             f"  -> {result.name} (MIDI {result.midi_note}) "
-            f"vel={result.velocity} dur={result.duration:.2f}s"
+            f"vel={result.velocity} dur={result.duration:.2f}s  "
+            f"pole={pole_pos:.2f}"
         )
         return
 
@@ -109,7 +107,7 @@ def handle_strum(
         result = note_engine.compute_note(
             string_index=touch.string,
             fret_y=touch.y,
-            hand_distance=hand_distance,
+            pole_position=pole_pos,
             strum_velocity=strum_velocity,
         )
         audio.play_note(result.midi_note, result.velocity, result.duration)
@@ -121,7 +119,7 @@ def handle_strum(
         print(
             f"  -> {result.name} (MIDI {result.midi_note}) "
             f"str={touch.string} vel={result.velocity} "
-            f"dur={result.duration:.2f}s"
+            f"dur={result.duration:.2f}s  pole={pole_pos:.2f}"
         )
 
     fretboard.last_notes = note_strings
@@ -157,6 +155,7 @@ def main() -> None:
     phone_lock = threading.Lock()
 
     fretboard = FretboardState()
+    pole = PoleState()
 
     def on_result(
         result: HandLandmarkerResult, _output_image: mp.Image, _ts: int,
@@ -208,6 +207,9 @@ def main() -> None:
                 frame = cv2.flip(frame, 1)
                 frame_timestamp_ms += 33
 
+                # --- Pole detection (magenta tape) ---
+                update_pole_state(pole, frame)
+
                 mp_image = mp.Image(
                     image_format=mp.ImageFormat.SRGB,
                     data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
@@ -246,6 +248,11 @@ def main() -> None:
                             landmark_to_vec3(fret_lm[WRIST]),
                             SMOOTH_ALPHA,
                         )
+                        # Project fret hand onto the pole for pitch
+                        h, w, _ = frame.shape
+                        pole.position = compute_pole_position(
+                            fretboard.left_wrist, pole, w, h,
+                        )
 
                     if strum_lm is not None:
                         fretboard.right_wrist = smooth_vec3(
@@ -279,12 +286,14 @@ def main() -> None:
                             handle_strum(
                                 fretboard,
                                 phone_snap,
+                                pole,
                                 strum_event.velocity,
                                 note_engine,
                                 audio,
                             )
 
                 # --- Draw overlays ---
+                draw_pole_overlay(frame, pole)
                 draw_neck_line(frame, fretboard, strum_hand_lm)
                 draw_strum_panel(frame, fretboard)
                 draw_note_panel(frame, fretboard)

@@ -80,10 +80,6 @@ NUM_FRETS = 5
 OCTAVE_MIN = 2
 OCTAVE_MAX = 6
 
-# Hand distance range (normalized screen coords) that maps to the octave range
-HAND_DISTANCE_MIN = 0.05
-HAND_DISTANCE_MAX = 0.60
-
 # MIDI velocity range
 MIDI_VELOCITY_MIN = 40
 MIDI_VELOCITY_MAX = 127
@@ -96,7 +92,30 @@ NOTE_DURATION_MAX = 1.5
 STRUM_VEL_MAP_MIN = 0.02
 STRUM_VEL_MAP_MAX = 0.15
 
+# ---------------------------------------------------------------------------
+# Pole detection (magenta tape)
+# ---------------------------------------------------------------------------
+import numpy as np  # noqa: E402 (import needed for array constants)
+
+# HSV range for magenta/hot-pink tape (OpenCV H: 0-180, S/V: 0-255)
+TAPE_HSV_LOWER = np.array([140, 80, 80])
+TAPE_HSV_UPPER = np.array([175, 255, 255])
+
+# Minimum contour area (pixels²) to count as a tape band
+TAPE_MIN_AREA = 300
+
+# Gaussian blur kernel size for the mask (must be odd)
+TAPE_BLUR_KSIZE = 7
+
+# Morphological open/close kernel size
+TAPE_MORPH_KSIZE = 5
+
+# Smoothing factor for pole endpoint EMA (0 = no smoothing, 1 = frozen)
+POLE_SMOOTH_ALPHA = 0.6
+
+# ---------------------------------------------------------------------------
 # FluidSynth
+# ---------------------------------------------------------------------------
 SOUNDFONT_PATH = str(Path(__file__).parent / "soundfont.sf2")
 FLUIDSYNTH_GAIN = 0.8
 INSTRUMENT_PROGRAM = 25  # GM program 25 = Acoustic Guitar (steel)
