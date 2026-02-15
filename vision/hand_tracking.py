@@ -96,9 +96,8 @@ def detect_strum(fretboard: FretboardState, perp_dist: float) -> StrumEvent | No
             fretboard.strum_cooldown = STRUM_COOLDOWN_FRAMES
             fretboard.last_strum_direction = direction
             fretboard.last_strum_time = time.time()
-            if direction == "down":
-                fretboard.strum_count += 1
-                fretboard.strum_flash_frames = 6
+            fretboard.strum_count += 1
+            fretboard.strum_flash_frames = 6
             fretboard.prev_perp_dist = perp_dist
             return StrumEvent(direction=direction, velocity=velocity)
 

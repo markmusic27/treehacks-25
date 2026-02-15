@@ -276,8 +276,8 @@ def main() -> None:
                         )
                         strum_event = detect_strum(fretboard, perp)
 
-                        if strum_event is not None and strum_event.direction == "down":
-                            print(f"STRUM DOWN (#{fretboard.strum_count})")
+                        if strum_event is not None:
+                            print(f"STRUM {strum_event.direction.upper()} (#{fretboard.strum_count})")
                             with phone_lock:
                                 phone_snap = PhoneState(
                                     connected=phone.connected,

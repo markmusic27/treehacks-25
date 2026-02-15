@@ -42,6 +42,10 @@ class AudioEngine:
         self._active_timers: list[threading.Timer] = []
         self._lock = threading.Lock()
 
+        # Per-note generation counter: prevents an old noteoff timer from
+        # killing a note that was re-triggered after the timer was scheduled.
+        self._note_gen: dict[int, int] = {}
+
         self._init_synth()
 
     # -----------------------------------------------------------------
@@ -109,7 +113,9 @@ class AudioEngine:
         Play a single MIDI note (non-blocking).
 
         ``noteon`` fires immediately; a background timer sends ``noteoff``
-        after *duration* seconds.
+        after *duration* seconds.  If the same MIDI note is retriggered
+        before the timer fires, the old timer is harmlessly ignored so the
+        new note keeps ringing.
         """
         if not self.ready:
             return
@@ -118,20 +124,27 @@ class AudioEngine:
         velocity = max(0, min(127, velocity))
 
         with self._lock:
+            # Bump generation so any pending noteoff for this pitch is ignored
+            gen = self._note_gen.get(midi_note, 0) + 1
+            self._note_gen[midi_note] = gen
             self._synth.noteon(0, midi_note, velocity)
 
-        timer = threading.Timer(duration, self._note_off, args=(midi_note,))
+        timer = threading.Timer(
+            duration, self._note_off, args=(midi_note, gen),
+        )
         timer.daemon = True
         timer.start()
 
         with self._lock:
             self._active_timers.append(timer)
 
-    def _note_off(self, midi_note: int) -> None:
-        """Send a noteoff for *midi_note*."""
+    def _note_off(self, midi_note: int, gen: int) -> None:
+        """Send a noteoff only if *gen* is still the latest generation."""
         if not self.ready:
             return
         with self._lock:
+            if self._note_gen.get(midi_note, 0) != gen:
+                return  # a newer noteon superseded this one
             self._synth.noteoff(0, midi_note)
 
     def stop_all(self) -> None:

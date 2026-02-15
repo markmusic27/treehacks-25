@@ -42,8 +42,8 @@ SMOOTH_ALPHA = 0.6
 SWAP_HANDS = True
 
 # Strum detection
-STRUM_VELOCITY_THRESHOLD = 0.02   # Min perpendicular velocity to count as strum
-STRUM_COOLDOWN_FRAMES = 8         # Ignore strums within this many frames of last
+STRUM_VELOCITY_THRESHOLD = 0.008  # Min perpendicular velocity to count as strum
+STRUM_COOLDOWN_FRAMES = 4         # Ignore strums within this many frames of last
 
 # Strum tracking landmark — index fingertip
 STRUM_LANDMARK_INDEX = 8  # INDEX_FINGER_TIP
