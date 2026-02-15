@@ -25,9 +25,8 @@ from config import (
     NOTE_DURATION_MAX,
     NOTE_DURATION_MIN,
     NUM_FRETS,
-    OCTAVE_MAX,
-    OCTAVE_MIN,
-    STRING_NOTE_OFFSETS,
+    POLE_SEMITONE_RANGE,
+    STRING_BASE_MIDI,
     STRUM_VEL_MAP_MAX,
     STRUM_VEL_MAP_MIN,
 )
@@ -65,7 +64,7 @@ class NoteEngine:
 
     def __init__(self, num_strings: int = 6) -> None:
         self.num_strings = max(3, min(6, num_strings))
-        self.offsets = STRING_NOTE_OFFSETS[self.num_strings]
+        self.base_midi = STRING_BASE_MIDI[self.num_strings]
 
     # -----------------------------------------------------------------
     # Public API
@@ -96,14 +95,14 @@ class NoteEngine:
         -------
         NoteResult
         """
-        base_offset = self._string_to_offset(string_index)
+        base = self._string_to_base_midi(string_index)
         fret_semitones = self._fret_to_semitones(fret_y)
-        octave = self._pole_position_to_octave(pole_position)
+        pole_semitones = self._pole_to_semitones(pole_position)
         velocity = self._velocity_to_midi(strum_velocity)
         duration = self._velocity_to_duration(strum_velocity)
 
         midi_note = int(np.clip(
-            (octave + 1) * 12 + base_offset + fret_semitones,
+            base + pole_semitones + fret_semitones,
             0, 127,
         ))
 
@@ -117,10 +116,10 @@ class NoteEngine:
     # -----------------------------------------------------------------
     # Internal mappings
     # -----------------------------------------------------------------
-    def _string_to_offset(self, string_index: int) -> int:
-        """Map string index to a chromatic semitone offset from C."""
-        idx = max(0, min(string_index, len(self.offsets) - 1))
-        return self.offsets[idx]
+    def _string_to_base_midi(self, string_index: int) -> int:
+        """Return the open-string MIDI note for *string_index*."""
+        idx = max(0, min(string_index, len(self.base_midi) - 1))
+        return self.base_midi[idx]
 
     @staticmethod
     def _fret_to_semitones(fret_y: float) -> int:
@@ -128,22 +127,20 @@ class NoteEngine:
         Map the touch y-position to a semitone offset (0 to NUM_FRETS-1).
 
         y=0 (top of phone) → 0 semitones, y=1 (bottom) → NUM_FRETS-1.
+        Each phone fret space = 1 semitone.
         """
         return int(np.clip(fret_y * NUM_FRETS, 0, NUM_FRETS - 1))
 
     @staticmethod
-    def _pole_position_to_octave(pole_position: float) -> int:
+    def _pole_to_semitones(pole_position: float) -> int:
         """
-        Map hand position along the pole to an octave number.
+        Map hand position along the pole to a semitone shift.
 
-        ``pole_position`` is 0-1 where 0 = left end of pole, 1 = right end.
-        Position 0 (near the body / nut end) → high octave,
-        Position 1 (far end) → low octave.
+        ``pole_position`` 0-1 maps linearly to 0 – POLE_SEMITONE_RANGE
+        semitones, like sliding up the guitar neck.
         """
         t = float(np.clip(pole_position, 0.0, 1.0))
-        # t=0 → high octave, t=1 → low octave
-        octave = OCTAVE_MAX - t * (OCTAVE_MAX - OCTAVE_MIN)
-        return int(round(octave))
+        return int(round(t * POLE_SEMITONE_RANGE))
 
     @staticmethod
     def _velocity_to_midi(strum_velocity: float) -> int:

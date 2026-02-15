@@ -37,6 +37,7 @@ from config import (
     MODE_NAMES,
     MODE_SKELETON,
     MODEL_PATH,
+    POLE_PROJECTION_LANDMARK,
     SMOOTH_ALPHA,
     WRIST,
 )
@@ -81,45 +82,41 @@ def handle_strum(
     """
     pole_pos = pole.position  # 0-1 along the physical pole
 
-    active_touches = phone.touches
-    if not active_touches:
-        # No fingers on the fretboard — play a default open-string note
-        result = note_engine.compute_note(
-            string_index=0,
-            fret_y=0.0,
-            pole_position=pole_pos,
-            strum_velocity=strum_velocity,
-        )
-        audio.play_note(result.midi_note, result.velocity, result.duration)
-        fretboard.last_notes = [
-            f"{result.name}  vel={result.velocity}  dur={result.duration:.2f}s"
-        ]
-        fretboard.last_note_time = time.time()
-        print(
-            f"  -> {result.name} (MIDI {result.midi_note}) "
-            f"vel={result.velocity} dur={result.duration:.2f}s  "
-            f"pole={pole_pos:.2f}"
-        )
-        return
+    # Build a set of fretted strings from phone touches
+    fretted: dict[int, float] = {}
+    for touch in phone.touches:
+        fretted[touch.string] = touch.y
 
+    # Always strum ALL strings
     note_strings: list[str] = []
-    for touch in active_touches:
-        result = note_engine.compute_note(
-            string_index=touch.string,
-            fret_y=touch.y,
-            pole_position=pole_pos,
-            strum_velocity=strum_velocity,
-        )
+    for s in range(note_engine.num_strings):
+        if s in fretted:
+            # Finger on this string → pole shift + phone fret semitones
+            result = note_engine.compute_note(
+                string_index=s,
+                fret_y=fretted[s],
+                pole_position=pole_pos,
+                strum_velocity=strum_velocity,
+            )
+        else:
+            # Open string → just the base tuning note, no shift
+            result = note_engine.compute_note(
+                string_index=s,
+                fret_y=0.0,
+                pole_position=0.0,
+                strum_velocity=strum_velocity,
+            )
         audio.play_note(result.midi_note, result.velocity, result.duration)
+        open_tag = "" if s in fretted else " (open)"
         label = (
-            f"{result.name}  str={touch.string}  vel={result.velocity}  "
-            f"dur={result.duration:.2f}s"
+            f"{result.name}  str={s}  vel={result.velocity}  "
+            f"dur={result.duration:.2f}s{open_tag}"
         )
         note_strings.append(label)
         print(
             f"  -> {result.name} (MIDI {result.midi_note}) "
-            f"str={touch.string} vel={result.velocity} "
-            f"dur={result.duration:.2f}s  pole={pole_pos:.2f}"
+            f"str={s} vel={result.velocity} "
+            f"dur={result.duration:.2f}s  pole={pole_pos:.2f}{open_tag}"
         )
 
     fretboard.last_notes = note_strings
@@ -249,9 +246,11 @@ def main() -> None:
                             SMOOTH_ALPHA,
                         )
                         # Project fret hand onto the pole for pitch
+                        # (uses middle finger MCP — the grip point on the pole)
+                        grip_point = landmark_to_vec3(fret_lm[POLE_PROJECTION_LANDMARK])
                         h, w, _ = frame.shape
                         pole.position = compute_pole_position(
-                            fretboard.left_wrist, pole, w, h,
+                            grip_point, pole, w, h,
                         )
 
                     if strum_lm is not None:
@@ -276,8 +275,8 @@ def main() -> None:
                         )
                         strum_event = detect_strum(fretboard, perp)
 
-                        if strum_event is not None:
-                            print(f"STRUM {strum_event.direction.upper()} (#{fretboard.strum_count})")
+                        if strum_event is not None and strum_event.direction == "down":
+                            print(f"STRUM DOWN (#{fretboard.strum_count})")
                             with phone_lock:
                                 phone_snap = PhoneState(
                                     connected=phone.connected,
@@ -294,7 +293,6 @@ def main() -> None:
 
                 # --- Draw overlays ---
                 draw_pole_overlay(frame, pole)
-                draw_neck_line(frame, fretboard, strum_hand_lm)
                 draw_strum_panel(frame, fretboard)
                 draw_note_panel(frame, fretboard)
 

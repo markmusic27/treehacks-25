@@ -51,6 +51,9 @@ STRUM_LANDMARK_INDEX = 8  # INDEX_FINGER_TIP
 # Wrist landmark index
 WRIST = 0
 
+# Landmark used for pole position projection (MIDDLE_FINGER_MCP)
+POLE_PROJECTION_LANDMARK = 9
+
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
@@ -59,34 +62,34 @@ WS_PORT = 8765
 # ---------------------------------------------------------------------------
 # Note engine defaults
 # ---------------------------------------------------------------------------
-# Base MIDI note offsets per string (relative to octave root).
-# 6 strings: C, D, E, F, G, A  →  semitone offsets from C
-STRING_NOTE_OFFSETS_6 = [0, 2, 4, 5, 7, 9]
-STRING_NOTE_OFFSETS_5 = [0, 2, 4, 7, 9]
-STRING_NOTE_OFFSETS_4 = [0, 4, 7, 9]
-STRING_NOTE_OFFSETS_3 = [0, 4, 7]
+# Standard guitar tuning — absolute MIDI note numbers for open strings.
+# 6 strings low→high: E2=40, A2=45, D3=50, G3=55, B3=59, E4=64
+STRING_BASE_MIDI_6 = [40, 45, 50, 55, 59, 64]
+STRING_BASE_MIDI_5 = [40, 45, 50, 55, 59]
+STRING_BASE_MIDI_4 = [40, 45, 50, 55]
+STRING_BASE_MIDI_3 = [40, 45, 50]
 
-STRING_NOTE_OFFSETS = {
-    3: STRING_NOTE_OFFSETS_3,
-    4: STRING_NOTE_OFFSETS_4,
-    5: STRING_NOTE_OFFSETS_5,
-    6: STRING_NOTE_OFFSETS_6,
+STRING_BASE_MIDI = {
+    3: STRING_BASE_MIDI_3,
+    4: STRING_BASE_MIDI_4,
+    5: STRING_BASE_MIDI_5,
+    6: STRING_BASE_MIDI_6,
 }
 
-# Number of fret divisions on the phone fretboard
-NUM_FRETS = 5
+# Number of fret spaces on the phone (5 fret bars → 6 spaces → 0-5 semitones)
+NUM_FRETS = 6
 
-# Octave range mapped from hand distance
-OCTAVE_MIN = 2
-OCTAVE_MAX = 6
+# How many semitones the full pole travel adds (like sliding up the neck).
+# 14 semitones + 6 phone frets = 20 total — matches a real guitar neck.
+POLE_SEMITONE_RANGE = 14
 
-# MIDI velocity range
-MIDI_VELOCITY_MIN = 40
-MIDI_VELOCITY_MAX = 127
+# MIDI velocity range (narrowed to reduce dynamic extremes)
+MIDI_VELOCITY_MIN = 70
+MIDI_VELOCITY_MAX = 110
 
-# Note duration range (seconds)
-NOTE_DURATION_MIN = 0.2
-NOTE_DURATION_MAX = 1.5
+# Note duration range (seconds, narrowed for consistency)
+NOTE_DURATION_MIN = 1.5
+NOTE_DURATION_MAX = 2.5
 
 # Strum velocity range used for mapping (raw perpendicular crossing velocity)
 STRUM_VEL_MAP_MIN = 0.02
@@ -114,7 +117,7 @@ TAPE_MORPH_KSIZE = 5
 POLE_SMOOTH_ALPHA = 0.6
 
 # Flip pole endpoints (swap A and B).  Toggle if octave direction is inverted.
-POLE_FLIP = False
+POLE_FLIP = True
 
 # ---------------------------------------------------------------------------
 # FluidSynth
