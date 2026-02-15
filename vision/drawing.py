@@ -53,7 +53,7 @@ def draw_neck_line(
     # Neck line color (flashes white on strum)
     line_color = COLOR_YELLOW
     if fretboard.strum_flash_frames > 0:
-        flash_intensity = fretboard.strum_flash_frames / 6.0
+        flash_intensity = min(fretboard.strum_flash_frames / 18.0, 1.0)
         line_color = (
             int(0 + 255 * flash_intensity),
             255,
@@ -112,6 +112,54 @@ def draw_neck_line(
         perp_dist = signed_perp_distance_3d(sp, lw, rw)
         dist_color = COLOR_GREEN if perp_dist >= 0 else COLOR_RED
         cv2.circle(image, (cx, cy), 8, dist_color, 2, cv2.LINE_AA)
+
+
+def draw_neck_line_minimal(
+    image: np.ndarray,
+    fretboard: FretboardState,
+) -> None:
+    """Draw a subtle grey dashed line between wrists (for clean video mode)."""
+    if fretboard.left_wrist is None or fretboard.right_wrist is None:
+        return
+
+    h, w, _ = image.shape
+    lw = fretboard.left_wrist
+    rw = fretboard.right_wrist
+
+    lx, ly = lw.to_pixel(w, h)
+    rx, ry = rw.to_pixel(w, h)
+
+    line_color = (0, 0, 0)  # black (BGR)
+    thickness = 4
+
+    # Flash to yellow on strum (longer hold)
+    if fretboard.strum_flash_frames > 0:
+        flash = min(fretboard.strum_flash_frames / 12.0, 1.0)
+        line_color = (
+            int(0),               # B
+            int(255 * flash),     # G
+            int(255 * flash),     # R  → yellow in BGR
+        )
+        fretboard.strum_flash_frames -= 1
+
+    # Dashed line
+    dash_len = 12
+    gap_len = 10
+    dx, dy = rx - lx, ry - ly
+    line_len = (dx ** 2 + dy ** 2) ** 0.5
+    if line_len > 0:
+        ux, uy = dx / line_len, dy / line_len
+        dist = 0.0
+        while dist < line_len:
+            seg_end = min(dist + dash_len, line_len)
+            p1 = (int(lx + ux * dist), int(ly + uy * dist))
+            p2 = (int(lx + ux * seg_end), int(ly + uy * seg_end))
+            cv2.line(image, p1, p2, line_color, thickness, cv2.LINE_AA)
+            dist += dash_len + gap_len
+
+    # Small grey wrist dots
+    cv2.circle(image, (lx, ly), 4, line_color, -1, cv2.LINE_AA)
+    cv2.circle(image, (rx, ry), 4, line_color, -1, cv2.LINE_AA)
 
 
 # ---------------------------------------------------------------------------

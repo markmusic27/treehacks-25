@@ -120,8 +120,18 @@ POLE_SMOOTH_ALPHA = 0.6
 POLE_FLIP = False
 
 # ---------------------------------------------------------------------------
+# GX10 AI Coach (ASUS Ascent GX10 — dual-agent coaching server)
+# ---------------------------------------------------------------------------
+# Set GX10_URL env var to the machine's address, e.g. "http://192.168.1.50:8001"
+import os  # noqa: E402
+GX10_URL = os.environ.get("GX10_URL", "http://10.35.0.235:8001")
+
+# How often the browser may request coaching feedback (seconds)
+GX10_COACH_COOLDOWN = 5
+
+# ---------------------------------------------------------------------------
 # FluidSynth
 # ---------------------------------------------------------------------------
 SOUNDFONT_PATH = str(Path(__file__).parent / "soundfont.sf2")
 FLUIDSYNTH_GAIN = 0.8
-INSTRUMENT_PROGRAM = 25  # GM program 25 = Acoustic Guitar (steel)
+INSTRUMENT_PROGRAM = 27  # GM program 27 = Electric Guitar (clean)

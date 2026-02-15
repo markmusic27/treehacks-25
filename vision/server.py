@@ -14,12 +14,14 @@ A new browser WebSocket (port 8766) handles:
 """
 
 import asyncio
+import base64
 import json
 import threading
 import time
 from pathlib import Path
 
 import cv2
+import httpx
 import mediapipe as mp
 import numpy as np
 from mediapipe.tasks.python import BaseOptions
@@ -38,6 +40,8 @@ from audio_engine import AudioEngine
 from config import (
     COLOR_GREEN,
     COLOR_WHITE,
+    GX10_COACH_COOLDOWN,
+    GX10_URL,
     MODE_FULL,
     MODE_NAMES,
     MODE_SKELETON,
@@ -50,6 +54,7 @@ from drawing import (
     draw_fingertip_labels,
     draw_hand_info_panel,
     draw_neck_line,
+    draw_neck_line_minimal,
     draw_note_panel,
     draw_phone_panel,
     draw_pole_overlay,
@@ -220,6 +225,7 @@ class FrameProducer:
         self.latest_jpeg: bytes | None = None
         self.frame_lock = threading.Lock()
         self.running = False
+        self.show_overlays = False  # default: clean video
 
         self.fretboard = FretboardState()
         self.pole = PoleState()
@@ -291,24 +297,25 @@ class FrameProducer:
                     strum_hand_lm = None
 
                     if result and result.hand_landmarks:
-                        # Draw hands
-                        for idx, hand_landmarks in enumerate(result.hand_landmarks):
-                            if display_mode == MODE_SKELETON:
-                                draw_skeleton_only(frame, hand_landmarks, idx)
-                            else:
-                                drawing_utils.draw_landmarks(
-                                    frame,
-                                    hand_landmarks,
-                                    HandLandmarksConnections.HAND_CONNECTIONS,
-                                    drawing_styles.get_default_hand_landmarks_style(),
-                                    drawing_styles.get_default_hand_connections_style(),
-                                )
-                            if display_mode == MODE_FULL:
-                                draw_fingertip_labels(frame, hand_landmarks, idx)
+                        # Draw hand landmarks (only when overlays enabled)
+                        if self.show_overlays:
+                            for idx, hand_landmarks in enumerate(result.hand_landmarks):
+                                if display_mode == MODE_SKELETON:
+                                    draw_skeleton_only(frame, hand_landmarks, idx)
+                                else:
+                                    drawing_utils.draw_landmarks(
+                                        frame,
+                                        hand_landmarks,
+                                        HandLandmarksConnections.HAND_CONNECTIONS,
+                                        drawing_styles.get_default_hand_landmarks_style(),
+                                        drawing_styles.get_default_hand_connections_style(),
+                                    )
+                                if display_mode == MODE_FULL:
+                                    draw_fingertip_labels(frame, hand_landmarks, idx)
 
-                        draw_hand_info_panel(frame, result)
+                            draw_hand_info_panel(frame, result)
 
-                        # --- Hand tracking & strum detection ---
+                        # --- Hand tracking & strum detection (always runs) ---
                         fret_lm, strum_lm = identify_hands(result)
 
                         if fret_lm is not None:
@@ -317,8 +324,6 @@ class FrameProducer:
                                 landmark_to_vec3(fret_lm[WRIST]),
                                 SMOOTH_ALPHA,
                             )
-                            # Project fret hand onto the pole for pitch
-                            # (uses middle finger MCP — the grip point on the pole)
                             grip_point = landmark_to_vec3(fret_lm[POLE_PROJECTION_LANDMARK])
                             h, w, _ = frame.shape
                             self.pole.position = compute_pole_position(
@@ -364,47 +369,53 @@ class FrameProducer:
                                     self.midi_recorder,
                                 )
 
-                    # --- Draw overlays ---
-                    draw_pole_overlay(frame, self.pole)
-                    draw_neck_line(frame, self.fretboard, strum_hand_lm)
-                    draw_strum_panel(frame, self.fretboard)
-                    draw_note_panel(frame, self.fretboard)
+                    # --- Draw overlays (only when enabled) ---
+                    if self.show_overlays:
+                        draw_pole_overlay(frame, self.pole)
+                        draw_neck_line(frame, self.fretboard, strum_hand_lm)
+                        draw_strum_panel(frame, self.fretboard)
+                        draw_note_panel(frame, self.fretboard)
 
-                    with self.phone_lock:
-                        phone_snapshot = PhoneState(
-                            connected=self.phone.connected,
-                            touches=list(self.phone.touches),
-                            accel_x=self.phone.accel_x,
-                            accel_y=self.phone.accel_y,
-                            accel_z=self.phone.accel_z,
-                            last_update=self.phone.last_update,
-                        )
-                    draw_phone_panel(frame, phone_snapshot)
+                        with self.phone_lock:
+                            phone_snapshot = PhoneState(
+                                connected=self.phone.connected,
+                                touches=list(self.phone.touches),
+                                accel_x=self.phone.accel_x,
+                                accel_y=self.phone.accel_y,
+                                accel_z=self.phone.accel_z,
+                                last_update=self.phone.last_update,
+                            )
+                        draw_phone_panel(frame, phone_snapshot)
 
-                    # Recording indicator
-                    if self.midi_recorder.recording:
-                        cv2.circle(frame, (30, 30), 12, (0, 0, 255), -1, cv2.LINE_AA)
+                        # Recording indicator
+                        if self.midi_recorder.recording:
+                            cv2.circle(frame, (30, 30), 12, (0, 0, 255), -1, cv2.LINE_AA)
+                            cv2.putText(
+                                frame, "REC", (50, 38),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA,
+                            )
+
+                        # FPS & mode label
+                        current_time = time.time()
+                        fps = 0.9 * fps + 0.1 / max(current_time - prev_time, 1e-6)
+                        prev_time = current_time
                         cv2.putText(
-                            frame, "REC", (50, 38),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA,
+                            frame, f"FPS: {fps:.0f}",
+                            (frame.shape[1] - 130, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2, cv2.LINE_AA,
                         )
-
-                    # FPS
-                    current_time = time.time()
-                    fps = 0.9 * fps + 0.1 / max(current_time - prev_time, 1e-6)
-                    prev_time = current_time
-                    cv2.putText(
-                        frame, f"FPS: {fps:.0f}",
-                        (frame.shape[1] - 130, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2, cv2.LINE_AA,
-                    )
-
-                    cv2.putText(
-                        frame, f"Mode: {MODE_NAMES[display_mode]}",
-                        (frame.shape[1] - 200, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        COLOR_WHITE, 1, cv2.LINE_AA,
-                    )
+                        cv2.putText(
+                            frame, f"Mode: {MODE_NAMES[display_mode]}",
+                            (frame.shape[1] - 200, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            COLOR_WHITE, 1, cv2.LINE_AA,
+                        )
+                    else:
+                        # Clean mode: just the grey dashed neck line
+                        draw_neck_line_minimal(frame, self.fretboard)
+                        current_time = time.time()
+                        fps = 0.9 * fps + 0.1 / max(current_time - prev_time, 1e-6)
+                        prev_time = current_time
 
                     # Encode to JPEG
                     _, jpeg = cv2.imencode(
@@ -428,6 +439,60 @@ class FrameProducer:
 
     def stop(self):
         self.running = False
+
+
+# ---------------------------------------------------------------------------
+# GX10 AI Coaching
+# ---------------------------------------------------------------------------
+async def request_gx10_coaching(
+    producer: FrameProducer,
+    audio_base64: str,
+    culture: str = "general",
+    instrument: str = "string instrument",
+) -> dict:
+    """
+    Grab the latest video frame from the producer, combine it with the
+    browser-recorded audio, and call the GX10 dual-coach endpoint.
+    Returns the parsed JSON response or an error dict.
+    """
+    # Grab latest JPEG frame and base64-encode it
+    with producer.frame_lock:
+        jpeg = producer.latest_jpeg
+
+    if jpeg is None:
+        return {"error": "No video frame available yet"}
+
+    image_base64 = base64.b64encode(jpeg).decode("ascii")
+
+    payload = {
+        "image_base64": image_base64,
+        "audio_base64": audio_base64,
+        "culture": culture,
+        "instrument": instrument,
+    }
+
+    url = f"{GX10_URL}/dual-coach"
+    print(f"[GX10] Sending coaching request to {url}  "
+          f"(frame={len(jpeg)} bytes, audio={len(audio_base64)} chars, "
+          f"culture={culture}, instrument={instrument})")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            print(f"[GX10] Coaching response received "
+                  f"({result.get('total_time', '?')}s total)")
+            return result
+    except httpx.ConnectError:
+        print(f"[GX10] Connection failed — is the GX10 server running at {GX10_URL}?")
+        return {"error": f"Cannot connect to GX10 at {GX10_URL}"}
+    except httpx.HTTPStatusError as e:
+        print(f"[GX10] HTTP error: {e.response.status_code}")
+        return {"error": f"GX10 returned {e.response.status_code}: {e.response.text}"}
+    except Exception as e:
+        print(f"[GX10] Unexpected error: {e}")
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -464,8 +529,11 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
 
             await asyncio.sleep(1.0 / TARGET_FPS)
 
+    last_coaching_time = 0.0
+
     async def receive_commands():
-        """Listen for start/stop/set_instrument commands from the browser."""
+        """Listen for start/stop/set_instrument/coaching commands from the browser."""
+        nonlocal last_coaching_time
         try:
             async for message in websocket:
                 try:
@@ -524,6 +592,53 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
                         "recording": False,
                         "message": f"Recording stopped — {len(events)} notes captured",
                     }))
+
+                elif action == "set_overlays":
+                    show = bool(data.get("enabled", False))
+                    producer.show_overlays = show
+                    print(f"[Browser WS] Overlays {'ON' if show else 'OFF'}")
+                    await websocket.send(json.dumps({
+                        "type": "status",
+                        "overlays": show,
+                        "message": f"CV overlays {'enabled' if show else 'disabled'}",
+                    }))
+
+                elif action == "get_coaching":
+                    # Rate-limit coaching requests
+                    now = time.time()
+                    if now - last_coaching_time < GX10_COACH_COOLDOWN:
+                        await websocket.send(json.dumps({
+                            "type": "coaching_error",
+                            "error": f"Please wait {GX10_COACH_COOLDOWN}s between coaching requests",
+                        }))
+                        continue
+
+                    last_coaching_time = now
+                    audio_b64 = data.get("audio_base64", "")
+                    culture = data.get("culture", "general")
+                    instrument = data.get("instrument", "string instrument")
+
+                    # Send "loading" status
+                    await websocket.send(json.dumps({
+                        "type": "coaching_loading",
+                        "message": "Analyzing your performance...",
+                    }))
+
+                    # Call GX10 (async — doesn't block frame streaming)
+                    result = await request_gx10_coaching(
+                        producer, audio_b64, culture, instrument,
+                    )
+
+                    if "error" in result:
+                        await websocket.send(json.dumps({
+                            "type": "coaching_error",
+                            "error": result["error"],
+                        }))
+                    else:
+                        await websocket.send(json.dumps({
+                            "type": "coaching",
+                            **result,
+                        }))
 
         except Exception:
             pass

@@ -17,8 +17,10 @@ interface AnimatedCharacterProps {
 }
 
 /**
- * Lively character animation: float, gentle sway, scale pulse
- * so characters feel expressive and alive (Duolingo-style).
+ * Smooth looping character animation.
+ *
+ * Each property uses `repeatType: "mirror"` so the animation
+ * plays forward then reverses seamlessly — no jump at the seam.
  */
 export default function AnimatedCharacter({
   src,
@@ -31,53 +33,75 @@ export default function AnimatedCharacter({
   const [imgError, setImgError] = useState(false)
   const useImage = src && !imgError
 
-  const loopAnimations = () => {
-    const floatY = [0, -14, 0]
-    const sway = [0, -5, 5, 0]
-    const pulse = [1, 1.06, 1]
+  /* ---- entrance (runs once) ---- */
+  const enter = {
+    opacity: { from: 0, to: 1, duration: 0.4 },
+    scale: { from: 0.85, to: 1, duration: 0.45, ease: "easeOut" as const },
+    y: { from: 20, to: 0, duration: 0.45, ease: "easeOut" as const },
+  }
+
+  /* ---- looping values per variant (mirror-friendly: single target) ---- */
+  const floatY = -10
+  const swayDeg = 3
+  const pulse = 1.04
+  const bounceDur = 3.2
+
+  const buildAnimate = () => {
     switch (motionVariant) {
       case "float":
-        return { y: floatY }
+        return { opacity: 1, y: floatY, scale: 1, rotate: 0 }
       case "sway":
-        return { rotate: sway }
+        return { opacity: 1, rotate: swayDeg, y: 0, scale: 1 }
       case "bounce":
-        return { scale: pulse, y: [0, -8, 0] }
+        return { opacity: 1, y: -6, scale: pulse, rotate: 0 }
       default:
-        return { y: floatY, rotate: sway, scale: pulse }
+        return { opacity: 1, y: floatY, rotate: swayDeg, scale: pulse }
     }
   }
 
-  const loop = loopAnimations()
+  const buildTransition = () => {
+    const base = {
+      opacity: { duration: enter.opacity.duration },
+      y: {
+        duration: bounceDur,
+        repeat: Infinity,
+        repeatType: "mirror" as const,
+        ease: "easeInOut" as const,
+      },
+      scale: {
+        duration: bounceDur,
+        repeat: Infinity,
+        repeatType: "mirror" as const,
+        ease: "easeInOut" as const,
+      },
+      rotate: {
+        duration: bounceDur + 0.6,
+        repeat: Infinity,
+        repeatType: "mirror" as const,
+        ease: "easeInOut" as const,
+      },
+    }
+
+    // Disable unused channels so they don't fight
+    switch (motionVariant) {
+      case "float":
+        return { ...base, scale: { duration: 0 }, rotate: { duration: 0 } }
+      case "sway":
+        return { ...base, y: { duration: 0 }, scale: { duration: 0 } }
+      case "bounce":
+        return { ...base, rotate: { duration: 0 } }
+      default:
+        return base
+    }
+  }
 
   return (
     <motion.div
       className={`relative flex items-center justify-center overflow-visible ${className}`}
       style={{ width, minHeight: width }}
-      initial={{ opacity: 0, scale: 0.85, y: 30 }}
-      animate={{
-        opacity: 1,
-        scale: Array.isArray(loop.scale) ? loop.scale : 1,
-        y: Array.isArray(loop.y) ? loop.y : 0,
-        rotate: Array.isArray(loop.rotate) ? loop.rotate : 0,
-      }}
-      transition={{
-        opacity: { duration: 0.4 },
-        scale: {
-          duration: 2.8,
-          repeat: Infinity,
-          ease: "easeInOut",
-        },
-        y: {
-          duration: 2.8,
-          repeat: Infinity,
-          ease: "easeInOut",
-        },
-        rotate: {
-          duration: 3.2,
-          repeat: Infinity,
-          ease: "easeInOut",
-        },
-      }}
+      initial={{ opacity: 0, scale: enter.scale.from, y: enter.y.from, rotate: 0 }}
+      animate={buildAnimate()}
+      transition={buildTransition()}
     >
       {useImage ? (
         // eslint-disable-next-line @next/next/no-img-element
