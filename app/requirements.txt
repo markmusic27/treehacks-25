@@ -1,0 +1,31 @@
+# Air Guitar App — all dependencies across the pipeline
+#
+# Install: pip install -r requirements.txt
+# Also requires: brew install fluid-synth ffmpeg
+
+# ── Vision / CV ──────────────────────────────────────────────────────
+mediapipe
+opencv-python
+numpy
+websockets
+
+# ── Audio synthesis ──────────────────────────────────────────────────
+pyfluidsynth
+
+# ── MIDI processing ──────────────────────────────────────────────────
+pretty_midi
+basic-pitch
+onnxruntime
+
+# ── Audio processing ─────────────────────────────────────────────────
+scipy<1.13
+resampy<0.4.3
+demucs
+torchcodec
+setuptools<70
+
+# ── YouTube ──────────────────────────────────────────────────────────
+yt-dlp
+
+# ── Utilities ────────────────────────────────────────────────────────
+numpy<2
