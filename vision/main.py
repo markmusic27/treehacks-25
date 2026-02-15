@@ -78,18 +78,33 @@ def handle_strum(
 ) -> None:
     """
     Called on each detected down-strum.  Reads the current phone touches
-    and pole position, then plays a note for every active string.
+    and pole position, then plays the appropriate strings.
+
+    - No fingers pressed → strum all strings open.
+    - One or more strings pressed → only strum those strings.
+    - Two fingers on the same string → the one closest to the
+      strummer (highest y / nearest the bridge) wins.
     """
     pole_pos = pole.position  # 0-1 along the physical pole
 
-    # Build a set of fretted strings from phone touches
+    # Build a set of fretted strings from phone touches.
+    # If two fingers press the same string, keep the one closest to
+    # the strummer (highest y value = nearest the bridge).
     fretted: dict[int, float] = {}
     for touch in phone.touches:
-        fretted[touch.string] = touch.y
+        if touch.string not in fretted or touch.y > fretted[touch.string]:
+            fretted[touch.string] = touch.y
 
-    # Always strum ALL strings
+    # Decide which strings to play
+    if fretted:
+        # Only strum pressed strings
+        strings_to_play = sorted(fretted.keys())
+    else:
+        # No fingers → strum all strings open
+        strings_to_play = list(range(note_engine.num_strings))
+
     note_strings: list[str] = []
-    for s in range(note_engine.num_strings):
+    for s in strings_to_play:
         if s in fretted:
             # Finger on this string → pole shift + phone fret semitones
             result = note_engine.compute_note(
