@@ -19,6 +19,7 @@ from config import (
     TAPE_MIN_AREA,
     TAPE_BLUR_KSIZE,
     TAPE_MORPH_KSIZE,
+    POLE_FLIP,
     POLE_SMOOTH_ALPHA,
 )
 from models import PoleState, Vec3
@@ -80,6 +81,9 @@ def detect_pole_endpoints(
 
     # Sort left-to-right for consistent ordering
     centroids.sort(key=lambda p: p[0])
+
+    if POLE_FLIP:
+        return centroids[1], centroids[0]
     return centroids[0], centroids[1]
 
 

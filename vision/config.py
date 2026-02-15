@@ -113,6 +113,9 @@ TAPE_MORPH_KSIZE = 5
 # Smoothing factor for pole endpoint EMA (0 = no smoothing, 1 = frozen)
 POLE_SMOOTH_ALPHA = 0.6
 
+# Flip pole endpoints (swap A and B).  Toggle if octave direction is inverted.
+POLE_FLIP = False
+
 # ---------------------------------------------------------------------------
 # FluidSynth
 # ---------------------------------------------------------------------------
