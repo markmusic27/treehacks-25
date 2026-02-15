@@ -15,7 +15,7 @@ import {
   Box,
   Play,
 } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { PageTransition } from "@/components/maestro/page-transition"
 import { ProgressHeader } from "@/components/maestro/progress-header"
 import { PillowButton } from "@/components/maestro/pillow-button"
@@ -44,6 +44,8 @@ type DiscoveredInstrument = {
 
 export default function SelectPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const mode = searchParams.get("mode") || "tutor"
   const [selectedInstrument, setSelectedInstrument] =
     useState<Instrument | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -100,6 +102,7 @@ export default function SelectPage() {
     if (!selectedInstrument) return
     const params = new URLSearchParams({
       instrument: selectedInstrument.id,
+      mode,
     })
     router.push(`/play?${params.toString()}`)
   }
@@ -170,6 +173,7 @@ export default function SelectPage() {
       instrument: customId,
       customName: discovered.instrument.name,
       gmProgram: String(discovered.gmProgram ?? 25),
+      mode,
     })
     router.push(`/play?${params.toString()}`)
   }

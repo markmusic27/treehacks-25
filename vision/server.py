@@ -226,6 +226,7 @@ class FrameProducer:
         self.frame_lock = threading.Lock()
         self.running = False
         self.show_overlays = False  # default: clean video
+        self.paused = False  # when True, suppress strum audio & detection
 
         self.fretboard = FretboardState()
         self.pole = PoleState()
@@ -352,7 +353,7 @@ class FrameProducer:
                             )
                             strum_event = detect_strum(self.fretboard, perp)
 
-                            if strum_event is not None and strum_event.direction == "down":
+                            if strum_event is not None and strum_event.direction == "down" and not self.paused:
                                 print(f"STRUM DOWN (#{self.fretboard.strum_count})")
                                 with self.phone_lock:
                                     phone_snap = PhoneState(
@@ -603,6 +604,25 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
                         "message": f"CV overlays {'enabled' if show else 'disabled'}",
                     }))
 
+                elif action == "pause":
+                    producer.paused = True
+                    producer.audio.stop_all()
+                    print("[Browser WS] Paused — audio silenced, strums disabled")
+                    await websocket.send(json.dumps({
+                        "type": "status",
+                        "paused": True,
+                        "message": "Session paused",
+                    }))
+
+                elif action == "resume":
+                    producer.paused = False
+                    print("[Browser WS] Resumed — strums re-enabled")
+                    await websocket.send(json.dumps({
+                        "type": "status",
+                        "paused": False,
+                        "message": "Session resumed",
+                    }))
+
                 elif action == "get_coaching":
                     # Rate-limit coaching requests
                     now = time.time()
@@ -654,7 +674,10 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
     for task in pending:
         task.cancel()
 
-    print(f"[Browser WS] Disconnected: {websocket.remote_address}")
+    # Auto-pause on disconnect: silence notes and suppress strums
+    producer.paused = True
+    producer.audio.stop_all()
+    print(f"[Browser WS] Disconnected: {websocket.remote_address} — auto-paused")
 
 
 async def run_browser_ws(producer: FrameProducer, midi_recorder: MidiRecorder):

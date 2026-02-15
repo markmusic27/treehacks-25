@@ -16,17 +16,17 @@ const fadeUp = {
 
 const cards = [
   {
-    href: "/select",
+    href: "/select?mode=tutor",
     color: "#FFC800",
     title: "Tutoring",
     description: "Instruments, artists, songs — AI-powered guides",
     Character: CulturalInstructor,
   },
   {
-    href: "/select",
+    href: "/select?mode=record",
     color: "#CE82FF",
     title: "Generate Song",
-    description: "Record your performance and generate a MIDI song",
+    description: "Record your performance and generate a song",
     Character: RemixDJ,
   },
 ]

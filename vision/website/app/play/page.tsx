@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
-  ArrowRight,
   Circle,
   Square,
   Loader2,
@@ -11,11 +10,7 @@ import {
   WifiOff,
   Mic,
   MicOff,
-  Sparkles,
   Eye,
-  Music,
-  CheckCircle2,
-  AlertTriangle,
 } from "lucide-react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { PageTransition } from "@/components/maestro/page-transition"
@@ -33,28 +28,13 @@ type MidiEvent = {
   name: string
 }
 
-type CoachFeedback = {
-  agent: string
-  what_went_well: string
-  what_could_improve: string
-  specific_tip: string
-  instrument: string
-  inference_time: number
-}
-
-type CoachingResult = {
-  visual_coach: CoachFeedback
-  audio_coach: CoachFeedback
-  total_time: number
-  instrument: string
-}
-
 function RecordingStudio() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const instrumentId = searchParams.get("instrument")
   const customName = searchParams.get("customName")
   const gmProgram = searchParams.get("gmProgram")
+  const mode = searchParams.get("mode") || "tutor"
 
   // Support both built-in instruments and custom discovered ones
   const builtInInstrument = instruments.find((i) => i.id === instrumentId)
@@ -75,11 +55,8 @@ function RecordingStudio() {
   const [showOverlays, setShowOverlays] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
-  // ----- Microphone & AI coaching state -----
+  // ----- Microphone state -----
   const [micActive, setMicActive] = useState(false)
-  const [coachingLoading, setCoachingLoading] = useState(false)
-  const [coachingResult, setCoachingResult] = useState<CoachingResult | null>(null)
-  const [coachingError, setCoachingError] = useState<string | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
@@ -109,6 +86,10 @@ function RecordingStudio() {
       ws.onopen = () => {
         if (mounted) setWsConnected(true)
         console.log("[Vision WS] Connected")
+        // Resume the server (un-pause from a previous session)
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "resume" }))
+        }
         // Tell the Python server which instrument we're playing
         if (instrumentId && ws?.readyState === WebSocket.OPEN) {
           const msg: Record<string, string> = {
@@ -136,21 +117,6 @@ function RecordingStudio() {
             if (data.type === "midi") {
               setMidiEvents(data.events || [])
               console.log(`[Vision WS] Received ${data.total} MIDI events`)
-            } else if (data.type === "coaching") {
-              console.log("[Vision WS] AI coaching received")
-              setCoachingResult({
-                visual_coach: data.visual_coach,
-                audio_coach: data.audio_coach,
-                total_time: data.total_time,
-                instrument: data.instrument,
-              })
-              setCoachingLoading(false)
-            } else if (data.type === "coaching_loading") {
-              console.log(`[Vision WS] ${data.message}`)
-            } else if (data.type === "coaching_error") {
-              console.warn(`[Vision WS] Coaching error: ${data.error}`)
-              setCoachingError(data.error)
-              setCoachingLoading(false)
             } else if (data.type === "status") {
               console.log(`[Vision WS] ${data.message}`)
             }
@@ -179,6 +145,10 @@ function RecordingStudio() {
       mounted = false
       if (reconnectTimer) clearTimeout(reconnectTimer)
       if (ws) {
+        // Tell server to pause before disconnecting
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "pause" }))
+        }
         ws.onclose = null
         ws.close()
       }
@@ -265,10 +235,40 @@ function RecordingStudio() {
     sendWsCommand("set_overlays", { enabled: next })
   }, [showOverlays, sendWsCommand])
 
-  // ----- Send coaching request with given audio chunks -----
-  const sendCoachingRequest = useCallback(async (chunks: Blob[]) => {
-    setCoachingLoading(true)
-    setCoachingError(null)
+  // ----- Recording controls -----
+  const startRecording = useCallback(() => {
+    setIsRecording(true)
+    setElapsed(0)
+    setMidiEvents([])
+    sendWsCommand("start")
+    startMicrophone()
+  }, [sendWsCommand, startMicrophone])
+
+  /** Fully tear down the camera / audio session. */
+  const cleanupSession = useCallback(() => {
+    // Pause the server (silences notes, stops strum detection)
+    sendWsCommand("pause")
+    // Close the WebSocket so server auto-pauses even if the message is missed
+    if (wsRef.current) {
+      wsRef.current.onclose = null // prevent reconnect
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    setWsConnected(false)
+    // Release the video frame blob URL
+    setFrameSrc((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+  }, [sendWsCommand])
+
+  const stopRecording = useCallback(async () => {
+    sendWsCommand("stop")
+    setIsRecording(false)
+    if (intervalRef.current) clearInterval(intervalRef.current)
+
+    // Collect audio, encode to base64, store, and navigate to analysis
+    const chunks = await stopMicrophone()
 
     let audioBase64 = ""
     if (chunks.length > 0) {
@@ -277,52 +277,31 @@ function RecordingStudio() {
       audioBase64 = btoa(
         new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
       )
-      console.log(`[Coaching] Audio encoded: ${audioBase64.length} chars`)
     }
 
-    sendWsCommand("get_coaching", {
-      audio_base64: audioBase64,
-      culture: instrument?.origin || "general",
-      instrument: instrument?.name || "string instrument",
-    })
-  }, [sendWsCommand, instrument])
-
-  // ----- Recording controls -----
-  const startRecording = useCallback(() => {
-    setIsRecording(true)
-    setElapsed(0)
-    setMidiEvents([])
-    setCoachingResult(null)
-    setCoachingError(null)
-    setCoachingLoading(false)
-    sendWsCommand("start")
-    startMicrophone()
-  }, [sendWsCommand, startMicrophone])
-
-  const stopRecording = useCallback(async () => {
-    sendWsCommand("stop")
-    setIsRecording(false)
-    if (intervalRef.current) clearInterval(intervalRef.current)
-
-    const chunks = await stopMicrophone()
-    sendCoachingRequest(chunks)
-  }, [sendWsCommand, stopMicrophone, sendCoachingRequest])
-
-  const viewResults = useCallback(() => {
-    // Store MIDI events and session metadata in sessionStorage for the generation page
+    // Store for the analysis page
+    const origin = (builtInInstrument as Record<string, unknown>)?.origin as string | undefined
     sessionStorage.setItem(
-      "maestro_recording",
+      "maestro_audio_analysis",
       JSON.stringify({
-        midiEvents,
+        audioBase64,
+        culture: origin || "general",
+        instrument: instrument?.name || "string instrument",
         instrumentId: instrumentId || "guitar",
+        mode,
         elapsed,
       })
     )
+
+    // Tear down camera + instrument before leaving
+    cleanupSession()
+
     const params = new URLSearchParams({
       instrument: instrumentId || "guitar",
+      mode,
     })
-    router.push(`/generate?${params.toString()}`)
-  }, [midiEvents, instrumentId, elapsed, router])
+    router.push(`/analysis?${params.toString()}`)
+  }, [sendWsCommand, stopMicrophone, builtInInstrument, instrument, instrumentId, mode, elapsed, router, cleanupSession])
 
   // Timer
   useEffect(() => {
@@ -339,16 +318,8 @@ function RecordingStudio() {
     }
   }, [isRecording])
 
-  // Auto-navigate when recording stops and we have MIDI events
-  useEffect(() => {
-    if (!isRecording && midiEvents.length > 0 && elapsed > 0) {
-      // Wait 1 second to show the recording summary, then navigate
-      const timer = setTimeout(() => {
-        viewResults()
-      }, 1000)
-      return () => clearTimeout(timer)
-    }
-  }, [isRecording, midiEvents.length, elapsed, viewResults])
+  // Post-recording: stay on page to show coaching feedback
+  // (previously auto-navigated to /generate for Suno pipeline)
 
   function formatTime(s: number) {
     const m = Math.floor(s / 60)
@@ -374,7 +345,7 @@ function RecordingStudio() {
           className="text-center"
         >
           <h1 className="text-2xl md:text-3xl font-black text-foreground">
-            Tutoring Studio
+            {mode === "record" ? "Recording Studio" : "Tutoring Studio"}
           </h1>
           <p className="text-muted-foreground mt-1">
             Playing{" "}
@@ -526,144 +497,6 @@ function RecordingStudio() {
           )}
         </AnimatePresence>
 
-        {/* AI Coaching — loading indicator (shown after session ends) */}
-        <AnimatePresence>
-          {!isRecording && coachingLoading && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="w-full rounded-2xl border border-border p-6 flex flex-col items-center gap-3"
-              style={{ backgroundColor: "var(--maestro-surface)" }}
-            >
-              <Loader2 className="w-8 h-8 animate-spin" style={{ color: "#CE82FF" }} />
-              <p className="text-sm font-semibold text-foreground">
-                Analyzing your performance...
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Sending video + audio to GX10 AI coaches
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* AI Coaching feedback (shown after session ends) */}
-        <AnimatePresence>
-          {!isRecording && coachingResult && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className="w-full space-y-4"
-            >
-              {/* Visual Coach */}
-              <div
-                className="rounded-2xl border border-border p-5"
-                style={{ backgroundColor: "var(--maestro-surface)" }}
-              >
-                <div className="flex items-center gap-2 mb-3">
-                  <Eye className="w-4 h-4" style={{ color: "#FFD700" }} />
-                  <h3 className="font-bold text-foreground text-sm">Visual Form Coach</h3>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {coachingResult.visual_coach.inference_time.toFixed(1)}s
-                  </span>
-                </div>
-                <div className="space-y-2.5">
-                  <div className="flex gap-2">
-                    <CheckCircle2
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "var(--maestro-green)" }}
-                    />
-                    <p className="text-sm text-foreground">
-                      {coachingResult.visual_coach.what_went_well}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <AlertTriangle
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "var(--maestro-yellow, #FFD700)" }}
-                    />
-                    <p className="text-sm text-foreground">
-                      {coachingResult.visual_coach.what_could_improve}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Sparkles
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "#CE82FF" }}
-                    />
-                    <p className="text-sm text-foreground font-medium">
-                      {coachingResult.visual_coach.specific_tip}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Audio Coach */}
-              <div
-                className="rounded-2xl border border-border p-5"
-                style={{ backgroundColor: "var(--maestro-surface)" }}
-              >
-                <div className="flex items-center gap-2 mb-3">
-                  <Music className="w-4 h-4" style={{ color: "#CE82FF" }} />
-                  <h3 className="font-bold text-foreground text-sm">Audio Performance Coach</h3>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {coachingResult.audio_coach.inference_time.toFixed(1)}s
-                  </span>
-                </div>
-                <div className="space-y-2.5">
-                  <div className="flex gap-2">
-                    <CheckCircle2
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "var(--maestro-green)" }}
-                    />
-                    <p className="text-sm text-foreground">
-                      {coachingResult.audio_coach.what_went_well}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <AlertTriangle
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "var(--maestro-yellow, #FFD700)" }}
-                    />
-                    <p className="text-sm text-foreground">
-                      {coachingResult.audio_coach.what_could_improve}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Sparkles
-                      className="w-4 h-4 mt-0.5 shrink-0"
-                      style={{ color: "#CE82FF" }}
-                    />
-                    <p className="text-sm text-foreground font-medium">
-                      {coachingResult.audio_coach.specific_tip}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-muted-foreground text-center">
-                Analyzed in {coachingResult.total_time.toFixed(1)}s on ASUS GX10
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Coaching error (shown after session ends) */}
-        <AnimatePresence>
-          {!isRecording && coachingError && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="w-full rounded-xl border border-red-500/30 p-4 text-center"
-              style={{ backgroundColor: "rgba(255,59,48,0.08)" }}
-            >
-              <p className="text-sm text-red-400">{coachingError}</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {/* Connection status */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -742,15 +575,7 @@ function RecordingStudio() {
                 ))}
               </div>
 
-              {/* Generate Song CTA */}
-              <div className="mt-4 flex justify-center">
-                <PillowButton onClick={viewResults} size="lg">
-                  <span className="flex items-center gap-2">
-                    Generate Songs
-                    <ArrowRight className="w-5 h-5" />
-                  </span>
-                </PillowButton>
-              </div>
+              {/* TODO: replace with GX10 audio-to-text generation on port 8002 */}
             </motion.div>
           )}
         </AnimatePresence>
