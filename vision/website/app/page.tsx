@@ -33,7 +33,7 @@ export default function HomePage() {
         animate="animate"
         className="relative z-10 text-center mb-4"
       >
-        <h1 className="text-5xl md:text-7xl font-black tracking-tight text-[#58CC02]">
+        <h1 className="text-5xl md:text-7xl font-black tracking-tight text-primary">
           Maestro
         </h1>
       </motion.div>
@@ -43,7 +43,7 @@ export default function HomePage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.25, duration: 0.5 }}
-        className="relative z-10 text-lg md:text-xl text-[#777777] text-center max-w-md mb-10 font-semibold"
+        className="relative z-10 text-lg md:text-xl text-muted-foreground text-center max-w-md mb-10 font-semibold"
       >
         Learn any instrument. Play your favorite songs. Powered by AI.
       </motion.p>
@@ -61,7 +61,7 @@ export default function HomePage() {
             whileTap={{ scale: 0.97 }}
             className="
               relative px-14 py-4 rounded-2xl text-white font-extrabold text-lg md:text-xl uppercase tracking-wider
-              bg-[#58CC02] border-b-4 border-[#43C000]
+              bg-primary border-b-4 border-[#43C000]
               hover:bg-[#61D800] active:border-b-0 active:mt-1
               transition-all duration-75 cursor-pointer
               shadow-none
@@ -82,7 +82,7 @@ export default function HomePage() {
         {["Guitar", "Violin", "Cello", "Ukulele", "Bass", "Harp", "Banjo"].map((instrument) => (
           <span
             key={instrument}
-            className="px-4 py-2 rounded-full bg-[#F7F7F7] text-[#777777] text-sm font-bold border-2 border-[#E5E5E5]"
+            className="px-4 py-2 rounded-full bg-muted text-muted-foreground text-sm font-bold border-2 border-border"
           >
             {instrument}
           </span>

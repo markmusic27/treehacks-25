@@ -84,7 +84,7 @@ export default function AnimatedCharacter({
         <img
           src={src}
           alt={alt}
-          className="max-w-full max-h-full object-contain drop-shadow-xl select-none pointer-events-none"
+          className="max-w-full max-h-full object-contain select-none pointer-events-none"
           onError={() => setImgError(true)}
           draggable={false}
         />

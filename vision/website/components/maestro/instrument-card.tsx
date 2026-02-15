@@ -55,14 +55,14 @@ export function InstrumentCard({
       }}
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
-      className="relative flex flex-col items-center gap-3 p-6 rounded-2xl transition-all cursor-pointer select-none bg-white"
+      className="relative flex flex-col items-center gap-3 p-6 rounded-2xl transition-all cursor-pointer select-none bg-card"
       style={{
         border: isSelected
           ? `2.5px solid ${instrument.color}`
-          : "2.5px solid #E5E5E5",
+          : "2.5px solid var(--border)",
         borderBottom: isSelected
           ? `4px solid ${instrument.color}`
-          : "4px solid #E5E5E5",
+          : "4px solid var(--border)",
       }}
     >
       <motion.div
@@ -73,8 +73,8 @@ export function InstrumentCard({
       </motion.div>
 
       <div className="text-center relative z-10">
-        <p className="font-bold text-[#4B4B4B] text-base">{instrument.name}</p>
-        <p className="text-xs text-[#AFAFAF] mt-1">{instrument.origin}</p>
+        <p className="font-bold text-foreground text-base">{instrument.name}</p>
+        <p className="text-xs text-muted-foreground mt-1">{instrument.origin}</p>
       </div>
 
       <span

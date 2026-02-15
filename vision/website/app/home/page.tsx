@@ -229,15 +229,15 @@ export default function HomeDashboardPage() {
         aria-hidden="true"
       >
         <div
-          className="absolute top-1/4 left-1/4 w-72 h-72 rounded-full blur-[120px] opacity-20"
+          className="absolute top-1/4 left-1/4 w-72 h-72 rounded-full blur-[120px] opacity-30"
           style={{ backgroundColor: "var(--maestro-green)" }}
         />
         <div
-          className="absolute bottom-1/3 right-1/4 w-64 h-64 rounded-full blur-[100px] opacity-15"
+          className="absolute bottom-1/3 right-1/4 w-64 h-64 rounded-full blur-[100px] opacity-25"
           style={{ backgroundColor: "var(--maestro-blue)" }}
         />
         <div
-          className="absolute top-1/2 right-1/3 w-48 h-48 rounded-full blur-[80px] opacity-10"
+          className="absolute top-1/2 right-1/3 w-48 h-48 rounded-full blur-[80px] opacity-20"
           style={{ backgroundColor: "var(--maestro-purple)" }}
         />
       </motion.div>
