@@ -1,0 +1,9 @@
+# Song Generation dependencies
+#
+# System dependency:
+#   brew install fluid-synth   (for MIDI → WAV rendering)
+#
+# Install:
+#   pip install -r requirements.txt
+
+pretty_midi

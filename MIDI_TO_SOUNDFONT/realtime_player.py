@@ -194,6 +194,11 @@ class RealtimePlayer:
         self.active_notes = set()
         self.instrument = "acoustic_grand_piano"
 
+        # ── Session recording state ────────────────────────────────
+        self._recording = False
+        self._record_start = None
+        self._recorded_events = []  # list of (time_offset, "on"/"off", note, velocity)
+
         # Resolve requested instrument (GM, local SF2 preset, online download, fallback).
         self.change_instrument(instrument)
 
@@ -340,6 +345,9 @@ class RealtimePlayer:
                 return
         self.player.noteon(note, velocity)
         self.active_notes.add(note)
+        if self._recording:
+            t = time.time() - self._record_start
+            self._recorded_events.append((t, "on", note, velocity))
 
     def stop(self, note):
         """Stop a note. Note can be int (MIDI) or string ('C4')."""
@@ -349,11 +357,85 @@ class RealtimePlayer:
                 return
         self.player.noteoff(note)
         self.active_notes.discard(note)
+        if self._recording:
+            t = time.time() - self._record_start
+            self._recorded_events.append((t, "off", note, 0))
 
     def stop_all(self):
         """Stop all active notes."""
         self.player.all_notes_off()
         self.active_notes.clear()
+
+    # ── Session recording ───────────────────────────────────────────
+
+    def start_recording(self):
+        """Start recording note events. Call before playing notes."""
+        self._recording = True
+        self._record_start = time.time()
+        self._recorded_events = []
+        print("[Recording] Started — play notes now.")
+
+    def stop_recording(self):
+        """Stop recording and return the event list."""
+        self._recording = False
+        count = sum(1 for e in self._recorded_events if e[1] == "on")
+        duration = 0
+        if self._recorded_events:
+            duration = self._recorded_events[-1][0]
+        print(f"[Recording] Stopped — {count} notes, {duration:.1f}s")
+        return self._recorded_events
+
+    def save_recording(self, output_path="session.mid"):
+        """
+        Save recorded events as a MIDI file.
+
+        Args:
+            output_path: Where to save the .mid file.
+
+        Returns:
+            str: Path to saved MIDI file.
+        """
+        import pretty_midi
+
+        if not self._recorded_events:
+            print("[Recording] Nothing to save.")
+            return None
+
+        midi = pretty_midi.PrettyMIDI()
+        instrument = pretty_midi.Instrument(program=0, name="Session")
+
+        # Match note-on events with their corresponding note-off
+        open_notes = {}  # note_num -> (start_time, velocity)
+
+        for t, event_type, note, velocity in self._recorded_events:
+            if event_type == "on":
+                open_notes[note] = (t, velocity)
+            elif event_type == "off" and note in open_notes:
+                start, vel = open_notes.pop(note)
+                midi_note = pretty_midi.Note(
+                    velocity=vel,
+                    pitch=note,
+                    start=start,
+                    end=t,
+                )
+                instrument.notes.append(midi_note)
+
+        # Close any still-open notes
+        end_time = self._recorded_events[-1][0] + 0.5
+        for note, (start, vel) in open_notes.items():
+            midi_note = pretty_midi.Note(
+                velocity=vel, pitch=note, start=start, end=end_time,
+            )
+            instrument.notes.append(midi_note)
+
+        midi.instruments.append(instrument)
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
+        midi.write(output_path)
+
+        num_notes = len(instrument.notes)
+        print(f"[Recording] Saved {num_notes} notes → {output_path}")
+        return output_path
 
     def change_instrument(self, instrument):
         """
@@ -420,6 +502,9 @@ def interactive_mode(player):
     print("    off         → stop all notes")
     print("    i <name>    → change instrument")
     print("    list        → show available instruments")
+    print("    rec         → start recording session")
+    print("    stop        → stop recording")
+    print("    save        → save recording as MIDI")
     print("    q           → quit")
     print()
 
@@ -438,6 +523,20 @@ def interactive_mode(player):
         if line.lower() == "off":
             player.stop_all()
             print("    All notes off")
+            continue
+
+        if line.lower() == "rec":
+            player.start_recording()
+            continue
+
+        if line.lower() == "stop":
+            player.stop_recording()
+            continue
+
+        if line.lower().startswith("save"):
+            parts = line.split(maxsplit=1)
+            path = parts[1] if len(parts) > 1 else "session.mid"
+            player.save_recording(path)
             continue
 
         if line.lower() == "list":
