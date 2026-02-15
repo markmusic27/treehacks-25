@@ -14,6 +14,7 @@ final class FretboardViewController: UIViewController {
 
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
 
     override func viewDidLoad() {

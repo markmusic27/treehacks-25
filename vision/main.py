@@ -293,6 +293,7 @@ def main() -> None:
 
                 # --- Draw overlays ---
                 draw_pole_overlay(frame, pole)
+                draw_neck_line(frame, fretboard, strum_hand_lm)
                 draw_strum_panel(frame, fretboard)
                 draw_note_panel(frame, fretboard)
 

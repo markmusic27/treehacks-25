@@ -11,20 +11,20 @@
   --card-foreground: #FFFFFF;
   --popover: #2A2A2A;
   --popover-foreground: #FFFFFF;
-  --primary: #58CC02;
+  --primary: #CE82FF;
   --primary-foreground: #FFFFFF;
   --secondary: #2A2A2A;
   --secondary-foreground: #E5E5E5;
   --muted: #242424;
   --muted-foreground: #AFAFAF;
-  --accent: #89E219;
+  --accent: #DCA0FF;
   --accent-foreground: #FFFFFF;
   --destructive: #FF4B4B;
   --destructive-foreground: #FFFFFF;
   --border: #3A3A3A;
   --input: #3A3A3A;
-  --ring: #58CC02;
-  --chart-1: #58CC02;
+  --ring: #CE82FF;
+  --chart-1: #CE82FF;
   --chart-2: #1CB0F6;
   --chart-3: #CE82FF;
   --chart-4: #FF9600;
@@ -32,9 +32,9 @@
   --radius: 1rem;
 
   /* Maestro / Duolingo custom tokens */
-  --maestro-green: #58CC02;
-  --maestro-green-dark: #43C000;
-  --maestro-mask-green: #89E219;
+  --maestro-green: #CE82FF;
+  --maestro-green-dark: #A866CC;
+  --maestro-mask-green: #DCA0FF;
   --maestro-blue: #1CB0F6;
   --maestro-purple: #CE82FF;
   --maestro-orange: #FF9600;
@@ -53,12 +53,12 @@
 
   --sidebar: #141414;
   --sidebar-foreground: #FFFFFF;
-  --sidebar-primary: #58CC02;
+  --sidebar-primary: #CE82FF;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #2A2A2A;
   --sidebar-accent-foreground: #FFFFFF;
   --sidebar-border: #3A3A3A;
-  --sidebar-ring: #58CC02;
+  --sidebar-ring: #CE82FF;
 }
 
 @theme inline {
@@ -205,11 +205,11 @@
 
 /* Disco / color cycle glow */
 @keyframes disco-glow {
-  0%   { box-shadow: 0 0 20px rgba(88,204,2,0.4), 0 0 60px rgba(88,204,2,0.1); }
+  0%   { box-shadow: 0 0 20px rgba(206,130,255,0.4), 0 0 60px rgba(206,130,255,0.1); }
   25%  { box-shadow: 0 0 20px rgba(28,176,246,0.4), 0 0 60px rgba(28,176,246,0.1); }
-  50%  { box-shadow: 0 0 20px rgba(206,130,255,0.4), 0 0 60px rgba(206,130,255,0.1); }
+  50%  { box-shadow: 0 0 20px rgba(255,200,0,0.4), 0 0 60px rgba(255,200,0,0.1); }
   75%  { box-shadow: 0 0 20px rgba(255,150,0,0.4), 0 0 60px rgba(255,150,0,0.1); }
-  100% { box-shadow: 0 0 20px rgba(88,204,2,0.4), 0 0 60px rgba(88,204,2,0.1); }
+  100% { box-shadow: 0 0 20px rgba(206,130,255,0.4), 0 0 60px rgba(206,130,255,0.1); }
 }
 .animate-disco-glow { animation: disco-glow 4s ease-in-out infinite; }
 
@@ -276,7 +276,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--maestro-green);
+  background: var(--primary);
   animation: bounce-dot 1.4s infinite ease-in-out both;
 }
 .dot-loader span:nth-child(1) { animation-delay: -0.32s; }

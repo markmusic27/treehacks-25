@@ -117,7 +117,7 @@ TAPE_MORPH_KSIZE = 5
 POLE_SMOOTH_ALPHA = 0.6
 
 # Flip pole endpoints (swap A and B).  Toggle if octave direction is inverted.
-POLE_FLIP = True
+POLE_FLIP = False
 
 # ---------------------------------------------------------------------------
 # FluidSynth

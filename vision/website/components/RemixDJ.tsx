@@ -2,8 +2,6 @@
 
 import AnimatedCharacter from "./AnimatedCharacter"
 
-const CHARACTER_IMAGE = "/characters/dj-remix.png" // drop your DJ/Remix character PNG here
-
 /** DJ / Remix character: purple with headphones and deck (your design). */
 function RemixDJFallback() {
   return (
@@ -37,7 +35,6 @@ interface RemixDJProps {
 export default function RemixDJ({ width = 220 }: RemixDJProps) {
   return (
     <AnimatedCharacter
-      src={CHARACTER_IMAGE}
       alt="Remix DJ"
       width={width}
       motion="sway"

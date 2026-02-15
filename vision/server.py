@@ -40,7 +40,9 @@ from config import (
     COLOR_WHITE,
     MODE_FULL,
     MODE_NAMES,
+    MODE_SKELETON,
     MODEL_PATH,
+    POLE_PROJECTION_LANDMARK,
     SMOOTH_ALPHA,
     WRIST,
 )
@@ -50,6 +52,7 @@ from drawing import (
     draw_neck_line,
     draw_note_panel,
     draw_phone_panel,
+    draw_pole_overlay,
     draw_skeleton_only,
     draw_strum_panel,
 )
@@ -61,8 +64,9 @@ from hand_tracking import (
     signed_perp_distance_3d,
     smooth_vec3,
 )
-from models import FretboardState, PhoneState
+from models import FretboardState, PhoneState, PoleState
 from note_engine import NoteEngine
+from pole_detection import compute_pole_position, update_pole_state
 from websocket_server import start_ws_server
 
 # ---------------------------------------------------------------------------
@@ -112,50 +116,60 @@ class MidiRecorder:
 
 
 # ---------------------------------------------------------------------------
-# Note triggering (adapted from main.py, with MIDI recording)
+# Note triggering (matches main.py — strums ALL strings, uses pole position)
 # ---------------------------------------------------------------------------
 def handle_strum(
     fretboard: FretboardState,
     phone: PhoneState,
+    pole: PoleState,
     strum_velocity: float,
     note_engine: NoteEngine,
     audio: AudioEngine,
     midi_recorder: MidiRecorder,
 ) -> None:
-    if fretboard.left_wrist is None or fretboard.right_wrist is None:
-        return
+    """
+    Called on each detected down-strum.  Reads the current phone touches
+    and pole position, then plays a note for every active string.
+    """
+    pole_pos = pole.position  # 0-1 along the physical pole
 
-    dx = fretboard.left_wrist.x - fretboard.right_wrist.x
-    dy = fretboard.left_wrist.y - fretboard.right_wrist.y
-    hand_distance = (dx ** 2 + dy ** 2) ** 0.5
+    # Build a set of fretted strings from phone touches
+    fretted: dict[int, float] = {}
+    for touch in phone.touches:
+        fretted[touch.string] = touch.y
 
-    active_touches = phone.touches
-    if not active_touches:
-        result = note_engine.compute_note(
-            string_index=0, fret_y=0.0,
-            hand_distance=hand_distance, strum_velocity=strum_velocity,
-        )
-        audio.play_note(result.midi_note, result.velocity, result.duration)
-        midi_recorder.record(result.midi_note, result.velocity, result.duration, result.name)
-        fretboard.last_notes = [
-            f"{result.name}  vel={result.velocity}  dur={result.duration:.2f}s"
-        ]
-        fretboard.last_note_time = time.time()
-        return
-
+    # Always strum ALL strings
     note_strings: list[str] = []
-    for touch in active_touches:
-        result = note_engine.compute_note(
-            string_index=touch.string, fret_y=touch.y,
-            hand_distance=hand_distance, strum_velocity=strum_velocity,
-        )
+    for s in range(note_engine.num_strings):
+        if s in fretted:
+            # Finger on this string → pole shift + phone fret semitones
+            result = note_engine.compute_note(
+                string_index=s,
+                fret_y=fretted[s],
+                pole_position=pole_pos,
+                strum_velocity=strum_velocity,
+            )
+        else:
+            # Open string → just the base tuning note, no shift
+            result = note_engine.compute_note(
+                string_index=s,
+                fret_y=0.0,
+                pole_position=0.0,
+                strum_velocity=strum_velocity,
+            )
         audio.play_note(result.midi_note, result.velocity, result.duration)
         midi_recorder.record(result.midi_note, result.velocity, result.duration, result.name)
+        open_tag = "" if s in fretted else " (open)"
         label = (
-            f"{result.name}  str={touch.string}  vel={result.velocity}  "
-            f"dur={result.duration:.2f}s"
+            f"{result.name}  str={s}  vel={result.velocity}  "
+            f"dur={result.duration:.2f}s{open_tag}"
         )
         note_strings.append(label)
+        print(
+            f"  -> {result.name} (MIDI {result.midi_note}) "
+            f"str={s} vel={result.velocity} "
+            f"dur={result.duration:.2f}s  pole={pole_pos:.2f}{open_tag}"
+        )
 
     fretboard.last_notes = note_strings
     fretboard.last_note_time = time.time()
@@ -181,6 +195,7 @@ class FrameProducer:
         self.running = False
 
         self.fretboard = FretboardState()
+        self.pole = PoleState()
         self.note_engine = NoteEngine(num_strings=6)
         self.audio = AudioEngine()
 
@@ -234,6 +249,9 @@ class FrameProducer:
                     frame = cv2.flip(frame, 1)
                     frame_timestamp_ms += 33
 
+                    # --- Pole detection (magenta tape) ---
+                    update_pole_state(self.pole, frame)
+
                     mp_image = mp.Image(
                         image_format=mp.ImageFormat.SRGB,
                         data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
@@ -246,18 +264,24 @@ class FrameProducer:
                     strum_hand_lm = None
 
                     if result and result.hand_landmarks:
+                        # Draw hands
                         for idx, hand_landmarks in enumerate(result.hand_landmarks):
-                            drawing_utils.draw_landmarks(
-                                frame,
-                                hand_landmarks,
-                                HandLandmarksConnections.HAND_CONNECTIONS,
-                                drawing_styles.get_default_hand_landmarks_style(),
-                                drawing_styles.get_default_hand_connections_style(),
-                            )
-                            draw_fingertip_labels(frame, hand_landmarks, idx)
+                            if display_mode == MODE_SKELETON:
+                                draw_skeleton_only(frame, hand_landmarks, idx)
+                            else:
+                                drawing_utils.draw_landmarks(
+                                    frame,
+                                    hand_landmarks,
+                                    HandLandmarksConnections.HAND_CONNECTIONS,
+                                    drawing_styles.get_default_hand_landmarks_style(),
+                                    drawing_styles.get_default_hand_connections_style(),
+                                )
+                            if display_mode == MODE_FULL:
+                                draw_fingertip_labels(frame, hand_landmarks, idx)
 
                         draw_hand_info_panel(frame, result)
 
+                        # --- Hand tracking & strum detection ---
                         fret_lm, strum_lm = identify_hands(result)
 
                         if fret_lm is not None:
@@ -265,6 +289,13 @@ class FrameProducer:
                                 self.fretboard.left_wrist,
                                 landmark_to_vec3(fret_lm[WRIST]),
                                 SMOOTH_ALPHA,
+                            )
+                            # Project fret hand onto the pole for pitch
+                            # (uses middle finger MCP — the grip point on the pole)
+                            grip_point = landmark_to_vec3(fret_lm[POLE_PROJECTION_LANDMARK])
+                            h, w, _ = frame.shape
+                            self.pole.position = compute_pole_position(
+                                grip_point, self.pole, w, h,
                             )
 
                         if strum_lm is not None:
@@ -275,6 +306,7 @@ class FrameProducer:
                             )
                             strum_hand_lm = strum_lm
 
+                        # Strum detection (need both hands)
                         if (
                             self.fretboard.left_wrist is not None
                             and self.fretboard.right_wrist is not None
@@ -289,19 +321,24 @@ class FrameProducer:
                             strum_event = detect_strum(self.fretboard, perp)
 
                             if strum_event is not None and strum_event.direction == "down":
+                                print(f"STRUM DOWN (#{self.fretboard.strum_count})")
                                 with self.phone_lock:
                                     phone_snap = PhoneState(
                                         connected=self.phone.connected,
                                         touches=list(self.phone.touches),
                                     )
                                 handle_strum(
-                                    self.fretboard, phone_snap,
+                                    self.fretboard,
+                                    phone_snap,
+                                    self.pole,
                                     strum_event.velocity,
-                                    self.note_engine, self.audio,
+                                    self.note_engine,
+                                    self.audio,
                                     self.midi_recorder,
                                 )
 
-                    # Draw overlays
+                    # --- Draw overlays ---
+                    draw_pole_overlay(frame, self.pole)
                     draw_neck_line(frame, self.fretboard, strum_hand_lm)
                     draw_strum_panel(frame, self.fretboard)
                     draw_note_panel(frame, self.fretboard)
@@ -335,6 +372,13 @@ class FrameProducer:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2, cv2.LINE_AA,
                     )
 
+                    cv2.putText(
+                        frame, f"Mode: {MODE_NAMES[display_mode]}",
+                        (frame.shape[1] - 200, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        COLOR_WHITE, 1, cv2.LINE_AA,
+                    )
+
                     # Encode to JPEG
                     _, jpeg = cv2.imencode(
                         ".jpg", frame,
@@ -353,7 +397,7 @@ class FrameProducer:
             self.audio.shutdown()
             cap.release()
             self.running = False
-            print("[FrameProducer] Stopped.")
+            print(f"[FrameProducer] Stopped. Total strums: {self.fretboard.strum_count}")
 
     def stop(self):
         self.running = False

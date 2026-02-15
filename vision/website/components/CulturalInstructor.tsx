@@ -2,8 +2,6 @@
 
 import AnimatedCharacter from "./AnimatedCharacter"
 
-const CHARACTER_IMAGE = "/characters/cultural-conductor.png" // drop your Cultural Conductor PNG here
-
 /** Cultural Conductor: note-shaped with conductor jacket and floral patterns (your design). */
 function CulturalInstructorFallback() {
   return (
@@ -36,7 +34,6 @@ interface CulturalInstructorProps {
 export default function CulturalInstructor({ width = 220 }: CulturalInstructorProps) {
   return (
     <AnimatedCharacter
-      src={CHARACTER_IMAGE}
       alt="Cultural Conductor"
       width={width}
       motion="float"

@@ -61,7 +61,20 @@ def draw_neck_line(
         )
         fretboard.strum_flash_frames -= 1
 
-    cv2.line(image, (lx, ly), (rx, ry), line_color, thickness, cv2.LINE_AA)
+    # Dashed line
+    dash_len = 15
+    gap_len = 10
+    dx, dy = rx - lx, ry - ly
+    line_len = (dx ** 2 + dy ** 2) ** 0.5
+    if line_len > 0:
+        ux, uy = dx / line_len, dy / line_len
+        dist = 0.0
+        while dist < line_len:
+            seg_end = min(dist + dash_len, line_len)
+            p1 = (int(lx + ux * dist), int(ly + uy * dist))
+            p2 = (int(lx + ux * seg_end), int(ly + uy * seg_end))
+            cv2.line(image, p1, p2, line_color, thickness, cv2.LINE_AA)
+            dist += dash_len + gap_len
 
     # Wrist anchor dots
     cv2.circle(image, (lx, ly), 6, COLOR_YELLOW, -1, cv2.LINE_AA)

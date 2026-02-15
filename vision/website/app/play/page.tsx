@@ -5,14 +5,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import {
   Circle,
   Square,
-  Pause,
-  Play,
-  Video,
-  VideoOff,
-  Music,
-  Send,
   Loader2,
-  Music2,
   Wifi,
   WifiOff,
 } from "lucide-react"
@@ -20,13 +13,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { PageTransition } from "@/components/maestro/page-transition"
 import { ProgressHeader } from "@/components/maestro/progress-header"
 import { PillowButton } from "@/components/maestro/pillow-button"
-import { WaveformVisualizer } from "@/components/maestro/waveform-visualizer"
-import { EncouragingPopup } from "@/components/maestro/encouraging-popup"
-import { instruments, instructors } from "@/lib/mock-data"
-import { getSong } from "@/lib/songs"
-
-const PAUSE_GREETING =
-  "You're paused. Want to change the song? Or ask me anything about what we're working on."
+import { instruments } from "@/lib/mock-data"
 
 const VISION_WS_URL = "ws://localhost:8766"
 
@@ -42,49 +29,28 @@ function RecordingStudio() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const instrumentId = searchParams.get("instrument")
-  const songId = searchParams.get("song")
-  const instructorId = searchParams.get("instructor")
 
   const instrument = instruments.find((i) => i.id === instrumentId)
-  const song = getSong(songId)
-  const instructor = instructorId
-    ? instructors.find((i) => i.id === instructorId)
-    : null
 
   // ----- Core state -----
   const [isRecording, setIsRecording] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const [encouragement, setEncouragement] = useState<string | null>(null)
-  const [mockScore, setMockScore] = useState(0)
+  const [midiEvents, setMidiEvents] = useState<MidiEvent[]>([])
 
   // ----- Vision WebSocket state -----
   const [wsConnected, setWsConnected] = useState(false)
   const [frameSrc, setFrameSrc] = useState<string | null>(null)
-  const [midiEvents, setMidiEvents] = useState<MidiEvent[]>([])
   const wsRef = useRef<WebSocket | null>(null)
-  const prevBlobUrl = useRef<string | null>(null)
-
-  // ----- Chat state -----
-  const [chatMessages, setChatMessages] = useState<
-    { role: "user" | "assistant"; content: string }[]
-  >([])
-  const [chatInput, setChatInput] = useState("")
-  const [chatLoading, setChatLoading] = useState(false)
-  const chatEndRef = useRef<HTMLDivElement>(null)
 
   // ----- Refs for intervals -----
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const encourageRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const duration = song?.duration || 120
 
   // Redirect if missing params
   useEffect(() => {
-    if (!instrument || !song || !instructor) {
+    if (!instrument) {
       router.push("/select")
     }
-  }, [instrument, song, instructor, router])
+  }, [instrument, router])
 
   // ----- WebSocket connection to Vision server -----
   useEffect(() => {
@@ -106,14 +72,12 @@ function RecordingStudio() {
       ws.onmessage = (event) => {
         if (!mounted) return
         if (event.data instanceof Blob) {
-          // Binary = JPEG frame
           const url = URL.createObjectURL(event.data)
           setFrameSrc((prev) => {
             if (prev) URL.revokeObjectURL(prev)
             return url
           })
         } else {
-          // JSON message
           try {
             const data = JSON.parse(event.data)
             if (data.type === "midi") {
@@ -147,10 +111,9 @@ function RecordingStudio() {
       mounted = false
       if (reconnectTimer) clearTimeout(reconnectTimer)
       if (ws) {
-        ws.onclose = null // prevent reconnect
+        ws.onclose = null
         ws.close()
       }
-      // Clean up blob URL
       setFrameSrc((prev) => {
         if (prev) URL.revokeObjectURL(prev)
         return null
@@ -159,134 +122,31 @@ function RecordingStudio() {
   }, [])
 
   // ----- Send WS command -----
-  const sendWsCommand = useCallback(
-    (action: string) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ action }))
-      }
-    },
-    []
-  )
+  const sendWsCommand = useCallback((action: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action }))
+    }
+  }, [])
 
   // ----- Recording controls -----
   const startRecording = useCallback(() => {
     setIsRecording(true)
-    setIsPaused(false)
     setElapsed(0)
-    setMockScore(0)
     setMidiEvents([])
     sendWsCommand("start")
   }, [sendWsCommand])
 
-  const pauseRecording = useCallback(() => {
-    setIsPaused(true)
-  }, [])
-
-  const resumeRecording = useCallback(() => {
-    setIsPaused(false)
-  }, [])
-
   const stopRecording = useCallback(() => {
     sendWsCommand("stop")
     setIsRecording(false)
-    setIsPaused(false)
     if (intervalRef.current) clearInterval(intervalRef.current)
-    if (encourageRef.current) clearInterval(encourageRef.current)
-
-    const params = new URLSearchParams({
-      instrument: instrumentId || "",
-      song: songId || "",
-      duration: String(elapsed),
-    })
-    if (instructorId) params.set("instructor", instructorId)
-    params.set("new", "1")
-    router.push(`/results?${params.toString()}`)
-  }, [instrumentId, songId, instructorId, elapsed, router, sendWsCommand])
-
-  // When pause panel opens, show greeting
-  useEffect(() => {
-    if (isPaused && chatMessages.length === 0) {
-      setChatMessages([{ role: "assistant", content: PAUSE_GREETING }])
-    }
-  }, [isPaused, chatMessages.length])
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [chatMessages])
-
-  // ----- Chat -----
-  async function sendChat() {
-    const text = chatInput.trim()
-    if (!text || !instructor || chatLoading) return
-    const newMessages: { role: "user" | "assistant"; content: string }[] = [
-      ...chatMessages,
-      { role: "user", content: text },
-    ]
-    const apiMessages = newMessages.filter(
-      (m) =>
-        m.role === "user" ||
-        (m.role === "assistant" && m.content !== PAUSE_GREETING)
-    )
-    setChatInput("")
-    setChatMessages(newMessages)
-    setChatLoading(true)
-    try {
-      const res = await fetch("/api/instructor/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instructorId: instructor.id,
-          messages: apiMessages,
-          context: {
-            songTitle: song?.title,
-            instrumentName: instrument?.name,
-            midiEvents: midiEvents.length > 0 ? midiEvents : undefined,
-          },
-        }),
-      })
-      const data = (await res.json().catch(() => ({}))) as {
-        message?: string
-        error?: string
-      }
-      if (res.ok && data.message) {
-        setChatMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: data.message },
-        ])
-      } else {
-        const errMsg =
-          data.error ||
-          "I'm having trouble replying right now. Try again or continue your session."
-        setChatMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: errMsg },
-        ])
-      }
-    } catch {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Something went wrong. Try again in a moment.",
-        },
-      ])
-    } finally {
-      setChatLoading(false)
-    }
-  }
+  }, [sendWsCommand])
 
   // Timer
   useEffect(() => {
-    if (isRecording && !isPaused) {
+    if (isRecording) {
       intervalRef.current = setInterval(() => {
-        setElapsed((prev) => {
-          if (prev >= duration) {
-            stopRecording()
-            return prev
-          }
-          return prev + 1
-        })
-        setMockScore((prev) => Math.min(prev + Math.random() * 2, 100))
+        setElapsed((prev) => prev + 1)
       }, 1000)
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current)
@@ -295,27 +155,7 @@ function RecordingStudio() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [isRecording, isPaused, duration, stopRecording])
-
-  // Live feedback
-  useEffect(() => {
-    if (isRecording && !isPaused && instructor?.liveMessageExamples?.length) {
-      encourageRef.current = setInterval(() => {
-        const msg =
-          instructor.liveMessageExamples[
-            Math.floor(Math.random() * instructor.liveMessageExamples.length)
-          ]
-        setEncouragement(msg)
-        setTimeout(() => setEncouragement(null), 2000)
-      }, 5000 + Math.random() * 5000)
-    } else {
-      if (encourageRef.current) clearInterval(encourageRef.current)
-    }
-
-    return () => {
-      if (encourageRef.current) clearInterval(encourageRef.current)
-    }
-  }, [isRecording, isPaused, instructor])
+  }, [isRecording])
 
   function formatTime(s: number) {
     const m = Math.floor(s / 60)
@@ -323,30 +163,28 @@ function RecordingStudio() {
     return `${m}:${sec.toString().padStart(2, "0")}`
   }
 
-  const progress = (elapsed / duration) * 100
-
-  if (!instrument || !song || !instructor) return null
+  if (!instrument) return null
 
   return (
     <PageTransition className="min-h-screen bg-background flex flex-col">
       <ProgressHeader
         currentStep={2}
-        totalSteps={3}
+        totalSteps={2}
         onClose={() => router.push("/select")}
       />
 
       <div className="flex-1 flex flex-col items-center gap-6 max-w-3xl mx-auto w-full px-6 py-4">
-        {/* Song info header */}
+        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           className="text-center"
         >
           <h1 className="text-2xl md:text-3xl font-black text-foreground">
-            {song.title}
+            Recording Studio
           </h1>
           <p className="text-muted-foreground mt-1">
-            {song.artist} --{" "}
+            Playing{" "}
             <span style={{ color: instrument.color }} className="font-semibold">
               {instrument.name}
             </span>
@@ -377,10 +215,14 @@ function RecordingStudio() {
                   </p>
                   <p className="text-xs text-[#666] text-center">
                     Run{" "}
-                    <code className="bg-[#222] text-[#58CC02] px-2 py-0.5 rounded">
+                    <code className="bg-[#222] text-[#CE82FF] px-2 py-0.5 rounded">
                       uv run server.py
                     </code>{" "}
-                    in the <code className="bg-[#222] text-[#aaa] px-2 py-0.5 rounded">vision/</code> folder
+                    in the{" "}
+                    <code className="bg-[#222] text-[#aaa] px-2 py-0.5 rounded">
+                      vision/
+                    </code>{" "}
+                    folder
                   </p>
                 </>
               ) : (
@@ -393,9 +235,19 @@ function RecordingStudio() {
               )}
             </div>
           )}
-
         </motion.div>
 
+        {/* Timer */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="text-center"
+        >
+          <p className="text-4xl font-black text-foreground tabular-nums">
+            {formatTime(elapsed)}
+          </p>
+        </motion.div>
 
         {/* Controls */}
         <motion.div
@@ -417,44 +269,23 @@ function RecordingStudio() {
               </span>
             </PillowButton>
           ) : (
-            <>
-              <PillowButton
-                onClick={isPaused ? resumeRecording : pauseRecording}
-                size="md"
-                color="var(--maestro-blue)"
-                darkColor="#1490CC"
-              >
-                {isPaused ? (
-                  <span className="flex items-center gap-2">
-                    <Play className="w-5 h-5" />
-                    Resume
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <Pause className="w-5 h-5" />
-                    Pause
-                  </span>
-                )}
-              </PillowButton>
-
-              <PillowButton
-                onClick={stopRecording}
-                size="md"
-                color="var(--maestro-red)"
-                darkColor="#CC3333"
-              >
-                <span className="flex items-center gap-2">
-                  <Square className="w-4 h-4 fill-current" />
-                  Stop
-                </span>
-              </PillowButton>
-            </>
+            <PillowButton
+              onClick={stopRecording}
+              size="lg"
+              color="var(--maestro-red)"
+              darkColor="#CC3333"
+            >
+              <span className="flex items-center gap-2">
+                <Square className="w-4 h-4 fill-current" />
+                End Recording
+              </span>
+            </PillowButton>
           )}
         </motion.div>
 
         {/* Recording indicator */}
         <AnimatePresence>
-          {isRecording && !isPaused && (
+          {isRecording && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -477,112 +308,76 @@ function RecordingStudio() {
           )}
         </AnimatePresence>
 
-        {/* Pause panel: instructor chat + change song */}
+        {/* Connection status */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          className="flex items-center gap-2 text-xs"
+        >
+          {wsConnected ? (
+            <>
+              <Wifi className="w-3.5 h-3.5" style={{ color: "var(--maestro-green)" }} />
+              <span className="text-muted-foreground font-medium">Vision server connected</span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground font-medium">Disconnected</span>
+            </>
+          )}
+        </motion.div>
+
+        {/* MIDI events summary (shown after recording ends) */}
         <AnimatePresence>
-          {isPaused && (
+          {!isRecording && midiEvents.length > 0 && (
             <motion.div
-              initial={{ opacity: 0, y: 24 }}
+              initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 24 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full mt-4 rounded-2xl border border-border overflow-hidden"
+              exit={{ opacity: 0, y: 20 }}
+              className="w-full rounded-2xl border border-border p-5"
               style={{ backgroundColor: "var(--maestro-surface)" }}
             >
-              <div
-                className="p-4 border-b border-border flex items-center justify-between"
-                style={{ backgroundColor: `${instructor.color}18` }}
-              >
-                <span
-                  className="font-bold text-foreground"
-                  style={{ color: instructor.color }}
-                >
-                  {instructor.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    router.push(
-                      `/select?instrument=${instrumentId || ""}&instructor=${instructorId || ""}`
-                    )
-                  }
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
-                  style={{
-                    backgroundColor: `${instructor.color}30`,
-                    color: instructor.color,
-                  }}
-                >
-                  <Music2 className="w-4 h-4" />
-                  Change song
-                </button>
+              <h2 className="font-bold text-foreground text-sm mb-3">
+                Recording Complete
+              </h2>
+              <div className="flex items-center gap-6">
+                <div>
+                  <p className="text-2xl font-black" style={{ color: "var(--maestro-green)" }}>
+                    {midiEvents.length}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-semibold">Notes captured</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black" style={{ color: "var(--maestro-blue)" }}>
+                    {formatTime(elapsed)}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-semibold">Duration</p>
+                </div>
               </div>
-              <div className="flex flex-col max-h-64">
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                  {chatMessages.map((m, i) => (
-                    <div
-                      key={i}
-                      className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm"
-                        style={
-                          m.role === "user"
-                            ? {
-                                backgroundColor: instructor.color,
-                                color: "#fff",
-                              }
-                            : {
-                                backgroundColor:
-                                  "var(--maestro-surface-hover)",
-                                color: "var(--foreground)",
-                              }
-                        }
-                      >
-                        {m.content}
-                      </div>
-                    </div>
-                  ))}
-                  {chatLoading && (
-                    <div className="flex justify-start">
-                      <div className="rounded-2xl px-4 py-2.5 bg-maestro-surface-hover flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        {instructor.name} is typing...
-                      </div>
-                    </div>
-                  )}
-                  <div ref={chatEndRef} />
-                </div>
-                <div className="p-3 border-t border-border flex gap-2">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) =>
-                      e.key === "Enter" && !e.shiftKey && sendChat()
-                    }
-                    placeholder="Ask anything or type a message..."
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-maestro-green"
-                  />
-                  <button
-                    type="button"
-                    onClick={sendChat}
-                    disabled={chatLoading || !chatInput.trim()}
-                    className="p-2.5 rounded-xl font-semibold text-white disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                    style={{ backgroundColor: instructor.color }}
+
+              {/* MIDI event list */}
+              <div className="mt-4 max-h-48 overflow-y-auto flex flex-col gap-1">
+                {midiEvents.map((event, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between text-xs px-3 py-1.5 rounded-lg"
+                    style={{
+                      backgroundColor: i % 2 === 0 ? "transparent" : "var(--maestro-surface-hover)",
+                    }}
                   >
-                    {chatLoading ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Send className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
+                    <span className="font-bold text-foreground">{event.name}</span>
+                    <span className="text-muted-foreground">
+                      {event.time.toFixed(1)}s &middot; vel {event.velocity} &middot;{" "}
+                      {event.duration.toFixed(2)}s
+                    </span>
+                  </div>
+                ))}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
-
-      <EncouragingPopup message={encouragement} />
     </PageTransition>
   )
 }

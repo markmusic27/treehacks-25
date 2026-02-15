@@ -10,7 +10,7 @@ interface ConfettiBurstProps {
 
 export function ConfettiBurst({
   trigger,
-  colors = ["#58CC02", "#1CB0F6", "#CE82FF", "#FFC800", "#FF9600"],
+  colors = ["#CE82FF", "#1CB0F6", "#DCA0FF", "#FFC800", "#FF9600"],
 }: ConfettiBurstProps) {
   const fire = useCallback(() => {
     // Single short burst from center — no repeating side cannons
