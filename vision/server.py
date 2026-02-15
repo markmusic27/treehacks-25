@@ -76,6 +76,18 @@ BROWSER_WS_PORT = 8766
 JPEG_QUALITY = 70  # 0-100, lower = faster but blurrier
 TARGET_FPS = 30
 
+# Map website instrument IDs → GM program numbers
+INSTRUMENT_PROGRAM_MAP: dict[str, int] = {
+    "guitar":  25,   # Acoustic Guitar (steel)
+    "violin":  40,   # Violin
+    "cello":   42,   # Cello
+    "ukulele": 24,   # Nylon Guitar (closest match)
+    "bass":    32,   # Acoustic Bass
+    "harp":    46,   # Orchestral Harp
+    "banjo":   105,  # Banjo
+    "sitar":   104,  # Sitar
+}
+
 
 # ---------------------------------------------------------------------------
 # MIDI event recording
@@ -438,7 +450,7 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
             await asyncio.sleep(1.0 / TARGET_FPS)
 
     async def receive_commands():
-        """Listen for start/stop commands from the browser."""
+        """Listen for start/stop/set_instrument commands from the browser."""
         try:
             async for message in websocket:
                 try:
@@ -448,7 +460,34 @@ async def browser_ws_handler(websocket, producer: FrameProducer,
 
                 action = data.get("action")
 
-                if action == "start":
+                if action == "set_instrument":
+                    instrument_id = data.get("instrumentId", "")
+                    # Check built-in map first, then fall back to gmProgram from browser
+                    program = INSTRUMENT_PROGRAM_MAP.get(instrument_id)
+                    if program is None:
+                        gm_str = data.get("gmProgram")
+                        if gm_str is not None:
+                            try:
+                                program = int(gm_str)
+                            except (ValueError, TypeError):
+                                pass
+                    if program is not None:
+                        producer.audio.set_program(program)
+                        print(f"[Browser WS] Instrument set to '{instrument_id}' (program {program})")
+                        await websocket.send(json.dumps({
+                            "type": "status",
+                            "recording": midi_recorder.recording,
+                            "message": f"Instrument: {instrument_id}",
+                        }))
+                    else:
+                        print(f"[Browser WS] Unknown instrument: '{instrument_id}' — using default")
+                        await websocket.send(json.dumps({
+                            "type": "status",
+                            "recording": midi_recorder.recording,
+                            "message": f"Using default sound for: {instrument_id}",
+                        }))
+
+                elif action == "start":
                     midi_recorder.start()
                     print("[Browser WS] Recording STARTED")
                     await websocket.send(json.dumps({

@@ -1,15 +1,14 @@
 """
 Air Guitar App — Unified orchestrator for the full play flow.
 
-Two modes:
-  - BEGINNER: Pick a song + instrument → MIDI generated → CV rhythm-only
-  - HARD:     No MIDI reference → phone required → CV rhythm + melody
+Flow:
+  1. Pick a plucked string instrument
+  2. Soundfont check (local or download)
+  3. CV session (phone fretboard + air strum → MIDI recording)
 
 Modules:
   session          — Session configuration and state
-  song_search      — Song search via Perplexity / YouTube
-  instrument_setup — Instrument + soundfont management
-  midi_prep        — MIDI generation from song covers
+  instrument_setup — Instrument selection + soundfont management
   cv_session       — Computer vision recording session
   main             — Entry point and flow orchestrator
 """

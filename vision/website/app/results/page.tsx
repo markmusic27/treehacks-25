@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, Suspense, useEffect, useRef } from "react"
+import { useMemo, useState, Suspense, useEffect, useRef } from "react"
 import { motion } from "framer-motion"
 import { RotateCcw, Home, ChevronRight } from "lucide-react"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -11,6 +11,20 @@ import { WaveformVisualizer } from "@/components/maestro/waveform-visualizer"
 import { generateMockResult, instruments, instructors } from "@/lib/mock-data"
 import { recordSession } from "@/lib/progress"
 import { getSong } from "@/lib/songs"
+
+type MidiEvent = {
+  time: number
+  midi_note: number
+  velocity: number
+  duration: number
+  name: string
+}
+
+type RecordingData = {
+  midiEvents: MidiEvent[]
+  instrumentId: string
+  elapsed: number
+}
 
 function ResultsDashboard() {
   const router = useRouter()
@@ -23,6 +37,24 @@ function ResultsDashboard() {
   const instrument = instruments.find((i) => i.id === instrumentId)
   const song = getSong(songId)
   const instructor = instructorId ? instructors.find((i) => i.id === instructorId) : null
+
+  // Load real recording data from sessionStorage (set by /play page)
+  const [recording, setRecording] = useState<RecordingData | null>(null)
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("maestro_recording")
+      if (raw) {
+        const data = JSON.parse(raw) as RecordingData
+        setRecording(data)
+        // Clear after reading so stale data doesn't persist
+        sessionStorage.removeItem("maestro_recording")
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, [])
+
+  const hasRealRecording = recording && recording.midiEvents.length > 0
 
   const result = useMemo(
     () => generateMockResult(songId, instrumentId, undefined, song),
@@ -50,14 +82,32 @@ function ResultsDashboard() {
               Session complete
             </h1>
             <p className="text-muted-foreground mt-2">
-              {song?.title} — {song?.artist}
-              {instrument && (
-                <span
-                  className="font-semibold ml-1"
-                  style={{ color: instrument.color }}
-                >
-                  ({instrument.name})
-                </span>
+              {hasRealRecording ? (
+                <>
+                  {instrument && (
+                    <span
+                      className="font-semibold"
+                      style={{ color: instrument.color }}
+                    >
+                      {instrument.name}
+                    </span>
+                  )}
+                  {" "}— {recording.midiEvents.length} notes in{" "}
+                  {Math.floor(recording.elapsed / 60)}:
+                  {(recording.elapsed % 60).toString().padStart(2, "0")}
+                </>
+              ) : (
+                <>
+                  {song?.title} — {song?.artist}
+                  {instrument && (
+                    <span
+                      className="font-semibold ml-1"
+                      style={{ color: instrument.color }}
+                    >
+                      ({instrument.name})
+                    </span>
+                  )}
+                </>
               )}
               {instructor && (
                 <span className="text-muted-foreground ml-1">
@@ -108,7 +158,7 @@ function ResultsDashboard() {
             ))}
           </motion.div>
 
-          {/* Your recording placeholder */}
+          {/* Your recording */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -124,6 +174,76 @@ function ResultsDashboard() {
               color={instrument?.color || "var(--maestro-green)"}
               height={50}
             />
+
+            {/* Real MIDI event data from the session */}
+            {hasRealRecording && (
+              <div className="mt-4">
+                <div className="flex items-center gap-6 mb-3">
+                  <div>
+                    <p
+                      className="text-2xl font-black"
+                      style={{ color: "var(--maestro-green)" }}
+                    >
+                      {recording.midiEvents.length}
+                    </p>
+                    <p className="text-xs text-muted-foreground font-semibold">
+                      Notes played
+                    </p>
+                  </div>
+                  <div>
+                    <p
+                      className="text-2xl font-black"
+                      style={{ color: "var(--maestro-blue)" }}
+                    >
+                      {Math.floor(recording.elapsed / 60)}:
+                      {(recording.elapsed % 60).toString().padStart(2, "0")}
+                    </p>
+                    <p className="text-xs text-muted-foreground font-semibold">
+                      Duration
+                    </p>
+                  </div>
+                  <div>
+                    <p
+                      className="text-2xl font-black"
+                      style={{ color: "var(--maestro-purple)" }}
+                    >
+                      {Math.round(
+                        recording.midiEvents.reduce(
+                          (sum, e) => sum + e.velocity,
+                          0
+                        ) / recording.midiEvents.length
+                      )}
+                    </p>
+                    <p className="text-xs text-muted-foreground font-semibold">
+                      Avg velocity
+                    </p>
+                  </div>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto flex flex-col gap-1">
+                  {recording.midiEvents.map((event, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between text-xs px-3 py-1.5 rounded-lg"
+                      style={{
+                        backgroundColor:
+                          i % 2 === 0
+                            ? "transparent"
+                            : "var(--maestro-surface-hover)",
+                      }}
+                    >
+                      <span className="font-bold text-foreground">
+                        {event.name}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {event.time.toFixed(1)}s &middot; vel {event.velocity}{" "}
+                        &middot; {event.duration.toFixed(2)}s
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         </section>
 

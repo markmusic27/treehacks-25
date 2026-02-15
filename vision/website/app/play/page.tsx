@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
+  ArrowRight,
   Circle,
   Square,
   Loader2,
@@ -29,8 +30,16 @@ function RecordingStudio() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const instrumentId = searchParams.get("instrument")
+  const customName = searchParams.get("customName")
+  const gmProgram = searchParams.get("gmProgram")
 
-  const instrument = instruments.find((i) => i.id === instrumentId)
+  // Support both built-in instruments and custom discovered ones
+  const builtInInstrument = instruments.find((i) => i.id === instrumentId)
+  const instrument: { id: string; name: string; color: string } | null =
+    builtInInstrument ??
+    (instrumentId && customName
+      ? { id: instrumentId, name: customName, color: "#CE82FF" }
+      : null)
 
   // ----- Core state -----
   const [isRecording, setIsRecording] = useState(false)
@@ -67,6 +76,17 @@ function RecordingStudio() {
       ws.onopen = () => {
         if (mounted) setWsConnected(true)
         console.log("[Vision WS] Connected")
+        // Tell the Python server which instrument we're playing
+        if (instrumentId && ws?.readyState === WebSocket.OPEN) {
+          const msg: Record<string, string> = {
+            action: "set_instrument",
+            instrumentId,
+          }
+          // For custom instruments, also send the GM program number
+          if (gmProgram) msg.gmProgram = gmProgram
+          ws.send(JSON.stringify(msg))
+          console.log(`[Vision WS] Set instrument: ${instrumentId}${gmProgram ? ` (GM ${gmProgram})` : ""}`)
+        }
       }
 
       ws.onmessage = (event) => {
@@ -142,6 +162,22 @@ function RecordingStudio() {
     if (intervalRef.current) clearInterval(intervalRef.current)
   }, [sendWsCommand])
 
+  const viewResults = useCallback(() => {
+    // Store MIDI events and session metadata in sessionStorage for the generation page
+    sessionStorage.setItem(
+      "maestro_recording",
+      JSON.stringify({
+        midiEvents,
+        instrumentId: instrumentId || "guitar",
+        elapsed,
+      })
+    )
+    const params = new URLSearchParams({
+      instrument: instrumentId || "guitar",
+    })
+    router.push(`/generate?${params.toString()}`)
+  }, [midiEvents, instrumentId, elapsed, router])
+
   // Timer
   useEffect(() => {
     if (isRecording) {
@@ -157,6 +193,17 @@ function RecordingStudio() {
     }
   }, [isRecording])
 
+  // Auto-navigate when recording stops and we have MIDI events
+  useEffect(() => {
+    if (!isRecording && midiEvents.length > 0 && elapsed > 0) {
+      // Wait 1 second to show the recording summary, then navigate
+      const timer = setTimeout(() => {
+        viewResults()
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [isRecording, midiEvents.length, elapsed, viewResults])
+
   function formatTime(s: number) {
     const m = Math.floor(s / 60)
     const sec = s % 60
@@ -169,7 +216,7 @@ function RecordingStudio() {
     <PageTransition className="min-h-screen bg-background flex flex-col">
       <ProgressHeader
         currentStep={2}
-        totalSteps={2}
+        totalSteps={3}
         onClose={() => router.push("/select")}
       />
 
@@ -373,6 +420,16 @@ function RecordingStudio() {
                     </span>
                   </div>
                 ))}
+              </div>
+
+              {/* Generate Song CTA */}
+              <div className="mt-4 flex justify-center">
+                <PillowButton onClick={viewResults} size="lg">
+                  <span className="flex items-center gap-2">
+                    Generate Songs
+                    <ArrowRight className="w-5 h-5" />
+                  </span>
+                </PillowButton>
               </div>
             </motion.div>
           )}

@@ -105,6 +105,15 @@ class AudioEngine:
         """True when the synth is loaded and can play notes."""
         return self._synth is not None
 
+    def set_program(self, program: int, bank: int = 0) -> None:
+        """Change the GM instrument program at runtime."""
+        if not self.ready or self._sf_id is None:
+            return
+        with self._lock:
+            self._program = program
+            self._synth.program_select(0, self._sf_id, bank, program)
+            print(f"[AudioEngine] Switched to program {program} (bank {bank})")
+
     # -----------------------------------------------------------------
     # Playback
     # -----------------------------------------------------------------
