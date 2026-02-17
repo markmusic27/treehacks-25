@@ -1,0 +1,25 @@
+[project]
+name = "treehacks"
+version = "0.2.0"
+description = "Air instrument system — hand tracking + phone fretboard + MIDI audio"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mediapipe",
+    "opencv-python",
+    "numpy",
+    "websockets",
+    "pyfluidsynth",
+    "httpx",
+]
+
+[project.scripts]
+treehacks = "src.main:main"
+treehacks-server = "src.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

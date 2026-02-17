@@ -1,0 +1,147 @@
+"use client"
+
+import { motion } from "framer-motion"
+import {
+  Guitar,
+  Piano,
+  Music,
+  Drum,
+  Wind,
+  Megaphone,
+  Waves,
+  Music2,
+  Sparkles,
+} from "lucide-react"
+import type { Instrument } from "@/lib/types"
+
+const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
+  Guitar,
+  Piano,
+  Music,
+  Drum,
+  Wind,
+  Megaphone,
+  Waves,
+  Music2,
+}
+
+interface InstrumentCardProps {
+  instrument: Instrument
+  isSelected: boolean
+  onClick: () => void
+  onExplore?: () => void
+  index: number
+}
+
+export function InstrumentCard({
+  instrument,
+  isSelected,
+  onClick,
+  onExplore,
+  index,
+}: InstrumentCardProps) {
+  const Icon = iconMap[instrument.icon] || Music
+
+  return (
+    <motion.button
+      initial={{ opacity: 0, y: 30, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{
+        type: "spring",
+        stiffness: 300,
+        damping: 20,
+        delay: index * 0.05,
+      }}
+      whileHover={{
+        scale: 1.03,
+        transition: { type: "spring", stiffness: 400, damping: 20 },
+      }}
+      whileTap={{ scale: 0.97 }}
+      onClick={onClick}
+      className="group relative flex flex-col items-center gap-3 p-6 rounded-2xl transition-all cursor-pointer select-none bg-card"
+      style={{
+        border: isSelected
+          ? `2.5px solid ${instrument.color}`
+          : "2.5px solid var(--border)",
+        borderBottom: isSelected
+          ? `4px solid ${instrument.color}`
+          : "4px solid var(--border)",
+      }}
+    >
+      <motion.div
+        className="w-14 h-14 rounded-full flex items-center justify-center"
+        style={{ backgroundColor: `${instrument.color}18` }}
+      >
+        <Icon className="w-7 h-7" style={{ color: instrument.color }} />
+      </motion.div>
+
+      <div className="text-center relative z-10">
+        <p className="font-bold text-foreground text-base">{instrument.name}</p>
+        <p className="text-xs text-muted-foreground mt-1">{instrument.origin}</p>
+      </div>
+
+      <span
+        className="text-xs font-semibold px-2.5 py-0.5 rounded-full"
+        style={{
+          backgroundColor: `${instrument.color}15`,
+          color: instrument.color,
+        }}
+      >
+        {instrument.difficulty}
+      </span>
+
+      {/* Checkmark on selection */}
+      {isSelected && (
+        <motion.div
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ type: "spring", stiffness: 500, damping: 15 }}
+          className="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+          style={{ backgroundColor: instrument.color, color: "#FFFFFF" }}
+        >
+          {"✓"}
+        </motion.div>
+      )}
+
+      {/* Explore button — grey by default, instrument-colored on hover */}
+      {onExplore && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.3 + index * 0.05 }}
+          className="explore-btn absolute bottom-2.5 right-2.5 w-7 h-7 rounded-full flex items-center justify-center z-10 border cursor-pointer"
+          style={
+            {
+              backgroundColor: "var(--card)",
+              borderColor: "var(--border)",
+              "--inst-color": instrument.color,
+              "--inst-bg": `${instrument.color}20`,
+            } as React.CSSProperties
+          }
+          onClick={(e) => {
+            e.stopPropagation()
+            onExplore()
+          }}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget as HTMLElement
+            el.style.borderColor = instrument.color
+            el.style.backgroundColor = `${instrument.color}20`
+            const icon = el.querySelector("svg")
+            if (icon) icon.style.color = instrument.color
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget as HTMLElement
+            el.style.borderColor = "var(--border)"
+            el.style.backgroundColor = "var(--card)"
+            const icon = el.querySelector("svg")
+            if (icon) icon.style.color = ""
+          }}
+          whileHover={{ scale: 1.15 }}
+          whileTap={{ scale: 0.9 }}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-muted-foreground transition-colors" />
+        </motion.div>
+      )}
+    </motion.button>
+  )
+}
